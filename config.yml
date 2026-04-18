@@ -1,0 +1,4 @@
+programs:
+  server:
+    cmd: "go run /home/bde-albu/code42/gophercises/taskmaster/goserver.go"
+    
