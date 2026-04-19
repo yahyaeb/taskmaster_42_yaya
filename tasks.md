@@ -4,7 +4,7 @@
 - [x] Start jobs as child processes
 - [x] Keep processes alive and restarting as needed
 - [x] Track process status accurately (alive/dead)
-- [ ] Implement numprocs (multiple instances per program)
+- [x] Implement numprocs (multiple instances per program)
 
 ## Configuration Management
 - [x] Load configuration file at startup (YAML format)
@@ -12,7 +12,7 @@
 - [x] Add programs from configuration
 - [x] Remove programs when no longer in config
 - [x] Preserve unchanged processes during reload
-- [ ] Implement autostart flag (start at launch or not)
+- [x] Implement autostart flag (start at launch or not)
 - [ ] Implement autorestart modes (always/never/unexpected)
 - [ ] Implement starttime (grace period to consider started)
 - [ ] Implement startretries (max restart attempts)

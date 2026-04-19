@@ -13,9 +13,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-type Programs map[string]*Settings
-
 type Status string
+
+type Autostart string
 
 const (
 	STARTING Status = "starting"
@@ -24,48 +24,241 @@ const (
 	FATAL    Status = "fatal"
 )
 
-type Settings struct {
+const (
+	ALWAYS     = "always"
+	NEVER      = "never"
+	UNEXPECTED = "unexpected"
+)
+
+type Update struct {
 	Name   string
-	Cmd    string `yaml:"cmd"`
-	Pid    int
-	Status Status
+	Status Process
 }
 
-func watchdog(settings *Settings, updates chan Settings) {
-	for {
-		parts := strings.Fields(settings.Cmd)
+type Process struct {
+	Stat      Status
+	Pid       int
+	retries   int
+	lastStart time.Time
+	intended  bool
+}
 
-		if len(parts) == 0 {
-			fmt.Printf("No command specified for program %s\n", settings.Name)
-			updates <- Settings{Name: settings.Name, Status: FATAL}
-			return
+type Manager struct {
+	Config  map[string]*Settings
+	Process map[string]*Settings
+}
+
+type Settings struct {
+	ProcessName   string            `yaml:"process_name"`
+	Program       string            `yaml:"program"`
+	Cmd           string            `yaml:"cmd"`
+	Numprocs      int               `yaml:"numprocs"`
+	NumprocsStart int               `yaml:"numprocs_start"`
+	Umask         int               `yaml:"umask"`
+	Workingdir    string            `yaml:"workingdir"`
+	Autostart     bool              `yaml:"autostart"`
+	Autorestart   Autostart         `yaml:"autorestart"`
+	Exitcodes     []int             `yaml:"exitcodes"`
+	Startretries  int               `yaml:"startretries"`
+	Starttime     int               `yaml:"starttime"`
+	Stopsignal    string            `yaml:"stopsignal"`
+	Stoptime      int               `yaml:"stoptime"`
+	Stdout        string            `yaml:"stdout"`
+	Stderr        string            `yaml:"stderr"`
+	Env           map[string]string `yaml:"env"`
+	Status        Process
+}
+
+func formatProcessName(name string, num int) string {
+	return fmt.Sprintf("%s:%02d", name, num)
+}
+func stop(manager *Manager, stops map[string]chan struct{}) {
+
+	for name, ch := range stops {
+		if ch != nil {
+			safe(ch)
+			delete(stops, name)
+			fmt.Printf("Stopped program %s\n", name)
 		}
+	}
 
-		cmd := exec.Command(parts[0], parts[1:]...)
-
-		if err := cmd.Start(); err != nil {
-			fmt.Printf("Error starting program %s: %v\n", settings.Name, err)
-			updates <- Settings{Name: settings.Name, Status: FATAL}
-			time.Sleep(5 * time.Second)
-			continue
+	max := 0
+	for _, mgr := range manager.Process {
+		if mgr.Stoptime > max {
+			max = mgr.Stoptime
 		}
+	}
 
-		updates <- Settings{Name: settings.Name, Pid: cmd.Process.Pid, Status: RUNNING}
+	timeout := time.Now().Add(time.Duration(max+3) * time.Second)
+	for time.Now().Before(timeout) {
+		stopped := true
+		for _, mgr := range manager.Process {
+			if mgr.Status.Pid > 0 && mgr.Status.Stat == RUNNING {
+				stopped = false
+				break
+			}
+		}
+		if stopped {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 
-		fmt.Printf("Started program %s with PID %d\n", settings.Name, cmd.Process.Pid)
+	for _, mgr := range manager.Process {
+		if mgr.Status.Pid > 0 {
+			proc, _ := os.FindProcess(mgr.Status.Pid)
+			_ = proc.Kill()
+		}
+	}
+}
 
-		err := cmd.Wait()
-
+func openAndAttachFiles(cmd *exec.Cmd, setting *Settings) (outF, errF *os.File, err error) {
+	if setting.Stdout != "" {
+		outF, err = os.OpenFile(setting.Stdout, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 		if err != nil {
-			fmt.Printf("Program %s exited with error: %v\n", settings.Name, err)
-			updates <- Settings{Name: settings.Name, Status: FATAL, Pid: 0}
+			return nil, nil, fmt.Errorf("open stdout %s: %w", setting.Stdout, err)
 		}
+		cmd.Stdout = outF
+	}
+	if setting.Stderr != "" {
+		errF, err = os.OpenFile(setting.Stderr, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			if outF != nil {
+				outF.Close()
+			}
+			return nil, nil, fmt.Errorf("open stderr %s: %w", setting.Stderr, err)
+		}
+		cmd.Stderr = errF
+	} else if outF != nil {
+		cmd.Stderr = outF
+		errF = outF
+	}
+	return outF, errF, nil
+}
 
-		fmt.Printf("Program %s exited successfully\n", settings.Name)
-		updates <- Settings{Name: settings.Name, Status: STOPPED, Pid: 0}
+func watchdog(settings *Settings, updates chan Update, stop chan struct{}) {
 
-		time.Sleep(1 * time.Second)
+	parts := strings.Fields(settings.Cmd)
 
+	if len(parts) == 0 {
+		fmt.Printf("No command specified for program %s\n", settings.Program)
+		updates <- Update{Name: settings.ProcessName, Status: Process{Stat: FATAL}}
+		return
+	}
+
+	// Autostart check
+	if !settings.Autostart {
+		fmt.Printf("Program %s is set to not autostart, skipping...\n", settings.Program)
+		updates <- Update{Name: settings.ProcessName, Status: Process{Stat: STOPPED}}
+		return
+	}
+
+	// prepare command
+	cmd := exec.Command(parts[0], parts[1:]...)
+
+	if settings.Workingdir != "" {
+		cmd.Dir = settings.Workingdir
+	}
+
+	env := os.Environ()
+	if settings.Env != nil {
+		for key, value := range settings.Env {
+			env = append(env, fmt.Sprintf("%s=%s", key, value))
+		}
+		fmt.Printf("Set environment for program %s: %v\n", settings.Program, settings.Env)
+	}
+	cmd.Env = env
+
+	outF, errF, err := openAndAttachFiles(cmd, settings)
+	if err != nil {
+		fmt.Printf("Error setting up output files for program %s: %v\n", settings.Program, err)
+		updates <- Update{Name: settings.ProcessName, Status: Process{Stat: FATAL}}
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
+		fmt.Printf("Error starting program %s: %v\n", settings.Program, err)
+		updates <- Update{Name: settings.ProcessName, Status: Process{Stat: FATAL}}
+		time.Sleep(5 * time.Second)
+		return
+	}
+
+	// notify RUNNING
+	updates <- Update{Name: settings.ProcessName, Status: Process{Stat: RUNNING, Pid: cmd.Process.Pid}}
+	fmt.Printf("Started program %s with PID %d\n", settings.Program, cmd.Process.Pid)
+
+	// single waiter that publishes result to a done/broadcast
+	done := make(chan error, 1)
+	go func(c *exec.Cmd, of, ef *os.File) {
+		err := c.Wait()
+		if of != nil {
+			of.Close()
+		}
+		if ef != nil && ef != of {
+			ef.Close()
+		}
+		done <- err
+	}(cmd, outF, errF)
+
+	// broadcast the single wait result
+	finished := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = <-done
+		close(finished)
+	}()
+
+	// wait for either stop request or process finish
+	select {
+	case <-stop:
+		// request graceful stop
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		}
+		// wait for finish or force kill after Stoptimeout
+		waitTimeout := time.Duration(settings.Stoptime) * time.Second
+		if settings.Stoptime == 0 {
+			waitTimeout = 5 * time.Second
+		}
+		select {
+		case <-finished:
+			if waitErr != nil {
+				fmt.Printf("Program %s exited with error after stop: %v\n", settings.Program, waitErr)
+				updates <- Update{Name: settings.ProcessName, Status: Process{Stat: FATAL, Pid: 0}}
+			} else {
+				fmt.Printf("Program %s stopped gracefully\n", settings.Program)
+				updates <- Update{Name: settings.ProcessName, Status: Process{Stat: STOPPED, Pid: 0}}
+			}
+		case <-time.After(waitTimeout):
+			if cmd.Process != nil {
+				// escalate to SIGKILL if SIGTERM did not stop the child
+				err := cmd.Process.Signal(syscall.SIGKILL)
+				if err != nil {
+					fmt.Printf("Failed to SIGKILL program %s (pid %d): %v\n", settings.Program, cmd.Process.Pid, err)
+				} else {
+					fmt.Printf("Sent SIGKILL to program %s (pid %d)\n", settings.Program, cmd.Process.Pid)
+				}
+			}
+			<-finished
+			if waitErr != nil {
+				fmt.Printf("Program %s killed after timeout, error: %v\n", settings.Program, waitErr)
+				updates <- Update{Name: settings.ProcessName, Status: Process{Stat: FATAL, Pid: 0}}
+			} else {
+				fmt.Printf("Program %s killed after timeout\n", settings.Program)
+				updates <- Update{Name: settings.ProcessName, Status: Process{Stat: STOPPED, Pid: 0}}
+			}
+		}
+		return
+	case <-finished:
+		// process exited on its own
+		if waitErr != nil {
+			fmt.Printf("Program %s exited with error: %v\n", settings.Program, waitErr)
+			updates <- Update{Name: settings.ProcessName, Status: Process{Stat: FATAL, Pid: 0}}
+		} else {
+			fmt.Printf("Program %s exited successfully\n", settings.Program)
+			updates <- Update{Name: settings.ProcessName, Status: Process{Stat: STOPPED, Pid: 0}}
+		}
+		return
 	}
 }
 
@@ -76,102 +269,124 @@ func read(inputChan chan string) {
 	}
 }
 
-func reloadConfig(stopChans map[string]chan struct{}, programs Programs) (Programs, error) {
-	data, err := os.ReadFile("config.yml")
-	if err != nil {
-		return nil, err
-	}
+func spawn(prev *Manager, curr *Manager, updates chan Update, stops map[string]chan struct{}) {
+	for name, setting := range curr.Process {
+		if _, exists := prev.Process[name]; !exists {
+			s := *setting
 
-	var settings Programs
-	err = yaml.Unmarshal(data, &settings)
-	if err != nil {
-		return nil, err
-	}
+			if _, ok := stops[name]; !ok {
+				stops[name] = make(chan struct{})
+			}
 
-	for name := range programs {
-		if _, exists := settings[name]; !exists {
-			stopChans[name] <- struct{}{}
-			delete(settings, name)
-			fmt.Printf("Stopped program %s\n", name)
+			go watchdog(&s, updates, stops[name])
+			fmt.Printf("Started new program %s\n", setting.ProcessName)
 		}
 	}
-	return settings, nil
+
+	for name := range prev.Process {
+		if _, exists := curr.Process[name]; !exists {
+			if ch, ok := stops[name]; ok {
+				close(ch)
+				delete(stops, name)
+			}
+			fmt.Printf("Stopped removed program %s\n", name)
+		}
+	}
+}
+
+func load(manager *Manager) (*Manager, error) {
+
+	data, err := os.ReadFile("config.yml")
+
+	if err != nil {
+		panic(err)
+	}
+
+	// parse raw settings then wrap into Managers
+	var raw map[string]*Settings
+	err = yaml.Unmarshal(data, &raw)
+	if err != nil {
+		panic(err)
+	}
+
+	process := make(map[string]*Settings)
+	for name, s := range raw {
+		// build a map of instance-name -> settings for this program
+		for i := 0; i < s.Numprocs; i++ {
+			ns := *s
+			instName := formatProcessName(name, i)
+			ns.ProcessName = instName
+			process[instName] = &ns
+		}
+	}
+
+	manager = &Manager{Config: raw, Process: process}
+
+	return manager, nil
+}
+
+func safe(ch chan struct{}) {
+	defer func() { recover() }()
+	close(ch)
 }
 
 func main() {
-	data, err := os.ReadFile("config.yml")
 
-	if err != nil {
-		panic(err)
-	}
-
-	var settings Programs
-	err = yaml.Unmarshal(data, &settings)
-
-	if err != nil {
-		panic(err)
-	}
-
-	manager := struct {
-		updates chan Settings
+	ctl := struct {
+		updates chan Update
 		input   chan string
 		stop    map[string]chan struct{}
 		sighup  chan os.Signal
 	}{
-		updates: make(chan Settings),
+		updates: make(chan Update),
 		input:   make(chan string),
 		stop:    make(map[string]chan struct{}),
 		sighup:  make(chan os.Signal, 1),
 	}
 
-	signal.Notify(manager.sighup, syscall.SIGHUP)
+	manager, err := load(&Manager{})
 
-	for name, settings := range settings {
-		settings.Name = name
-		go watchdog(settings, manager.updates)
+	if err != nil {
+		fmt.Printf("Error loading configuration: %v\n", err)
+		return
 	}
 
-	go read(manager.input)
+	spawn(&Manager{}, manager, ctl.updates, ctl.stop)
+	signal.Notify(ctl.sighup, syscall.SIGHUP)
+
+	go read(ctl.input)
 
 	for {
 		fmt.Print("> ")
 
 		select {
-		case <-manager.sighup:
-			fmt.Println("reloading configuration...")
-			newSettings, err := reloadConfig(manager.stop, settings)
+		case <-ctl.sighup:
+			fmt.Println("Hot-reloading configuration...")
+
+			newManager, err := load(&Manager{})
+
 			if err != nil {
 				fmt.Printf("Error reloading configuration: %v\n", err)
 				continue
 			}
 
-			for name, setting := range newSettings {
-				if _, exists := settings[name]; !exists {
-					setting.Name = name
-					go watchdog(setting, manager.updates)
-					fmt.Printf("Started new program %s\n", name)
-				}
-			}
+			spawn(manager, newManager, ctl.updates, ctl.stop)
 
-			settings = newSettings
-		case msg := <-manager.updates:
+			manager = newManager
+
+		case msg := <-ctl.updates:
 			// The Manager updates the central state
-			if setting, ok := settings[msg.Name]; ok {
-				setting.Status = msg.Status
-				setting.Pid = msg.Pid
+			if mgr, ok := manager.Process[msg.Name]; ok {
+				mgr.Status = msg.Status
+				fmt.Printf("Updated status for program %s: %s\n", msg.Name, msg.Status.Stat)
 			}
-		case input := <-manager.input:
+		case input := <-ctl.input:
 			switch input {
 			case "exit":
-				for _, setting := range settings {
-					if setting.Pid > 0 {
-						process, _ := os.FindProcess(setting.Pid)
-						process.Kill()
-					}
-				}
+				stop(manager, ctl.stop)
 			case "status":
-				for name, setting := range settings {
-					fmt.Printf("Program: %s | Status: %s | PID: %d\n", name, setting.Status, setting.Pid)
+				for name, mgr := range manager.Process {
+					fmt.Printf("Program: %s | Status: %s | PID: %d\n", name, mgr.Status.Stat, mgr.Status.Pid)
 				}
 			case "reload":
 				fmt.Println("reloading configuration...")
