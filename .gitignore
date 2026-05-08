@@ -58,5 +58,3 @@ repomix-output.xml
 
 # Binary files
 *.bin
-daemon
-ctl
