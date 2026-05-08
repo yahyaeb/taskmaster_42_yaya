@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"taskmaster/internal/app"
 	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
 	"taskmaster/internal/engine"
@@ -349,6 +350,14 @@ func main() {
 
 	go read(ctl.input)
 
+	m := app.NewManager()
+
+	socketPath := "/tmp/taskmaster.sock"
+	err = app.StartSocketListener(socketPath, m)
+	if err != nil {
+		fmt.Printf("Error starting socket server: %v\n", err)
+		return
+	}
 	for {
 		fmt.Print("> ")
 

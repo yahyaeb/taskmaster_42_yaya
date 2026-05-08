@@ -2,10 +2,7 @@ Root:
   ├── main.go                  
   ├── go.mod                    
   ├── go.sum                  
-  ├── config.yml                
-  ├── .repomixignore           
-  ├── REORGANIZATION.md        
-  ├── DEVELOPER_GUIDE.md       
+  ├── config.yml                      
   ├── CLAUDE.md               
   ├── .context/                
   │   ├── watchdog_legacy.go
@@ -36,6 +33,9 @@ Root:
   │   ├── daemon/
   │   │   └── main.go           
   │   └── ctl/
-  │       └── main.go         
+  │       └── main.go
+  ├── tmp/          
+  │   └── taskmaster.sock
+  │
   └── .git/
 
