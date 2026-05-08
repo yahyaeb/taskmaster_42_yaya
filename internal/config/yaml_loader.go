@@ -16,6 +16,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ConfigFile represents the top-level structure of the YAML configuration file.
+type ConfigFile struct {
+	Programs map[string]ConfigSpec `yaml:"programs"`
+}
+
 // YAMLLoader implements Loader for YAML configuration files.
 type YAMLLoader struct{}
 
@@ -28,14 +33,19 @@ func (l *YAMLLoader) Load(path string) ([]ConfigSpec, error) {
 		return nil, fmt.Errorf("read config file %s: %w", path, err)
 	}
 
-	var raw map[string]ConfigSpec
-	err = yaml.Unmarshal(data, &raw)
+	var configFile ConfigFile
+	err = yaml.Unmarshal(data, &configFile)
 	if err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
 
 	var specs []ConfigSpec
-	for name, spec := range raw {
+	for name, spec := range configFile.Programs {
+		// Set Program from map key if not already set
+		if spec.Program == "" {
+			spec.Program = name
+		}
+
 		// Validate spec before expansion
 		if err := spec.Validate(); err != nil {
 			return nil, fmt.Errorf("validate spec %q: %w", name, err)

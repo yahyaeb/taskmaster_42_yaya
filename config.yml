@@ -1,4 +1,19 @@
 programs:
+  dummy-program:
+    cmd: "echo Hello from dummy!"
+    numprocs: 1
+    autostart: true
+    autorestart: unexpected
+    exitcodes: [0]
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 10
+    stdout: /tmp/dummy.stdout
+    stderr: /tmp/dummy.stderr
+    env: {}
+    workingdir: /tmp
+
   server:
     cmd: "go run /home/bde-albu/code42/gophercises/taskmaster/goserver.go"
     numprocs: 1
@@ -18,4 +33,3 @@ programs:
     env:
       STARTED_BY: taskmaster
       ANSWER: 42
-    

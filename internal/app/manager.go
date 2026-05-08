@@ -47,6 +47,22 @@ func (pi *ProcessInstance) SetPid(p int) {
 	pi.Pid = p
 }
 
+func (pi *ProcessInstance) SetStateOnStart(pid int) {
+	pi.Mu.Lock()
+	defer pi.Mu.Unlock()
+	pi.Pid = pid
+	pi.Status = bus.RUNNING
+	pi.LastStart = time.Now()
+	pi.RetryCount = 0 // Reset retry count on successful start
+}
+
+func (pi *ProcessInstance) SetStateOnBackoff(attempt int) {
+	pi.Mu.Lock()
+	defer pi.Mu.Unlock()
+	pi.Status = bus.BACKOFF
+	pi.RetryCount = attempt
+}
+
 func (pi *ProcessInstance) State() (int, bus.Status) {
 	pi.Mu.RLock()
 	defer pi.Mu.RUnlock()
@@ -104,15 +120,27 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		pidMu      sync.RWMutex
 	)
 
+	proc, ok := m.Process[setting.ProcessName]
+	if !ok {
+		fmt.Printf("Error: ProcessInstance for %s not found in manager\n", setting.ProcessName)
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
+		return
+	}
+
 	watcher.OnProcessStarted = func(pid int) {
 		pidMu.Lock()
 		currentPID = pid
 		pidMu.Unlock()
+
+		proc.SetStateOnStart(pid)
+
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.RUNNING, Pid: pid}
 		fmt.Printf("Started program %s with PID %d\n", setting.Program, pid)
 	}
+	
 
 	watcher.OnBackoff = func(attempt int) {
+		proc.SetStateOnBackoff(attempt)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.BACKOFF, Pid: currentPID}
 		fmt.Printf("Program %s is backoff after %d attempts\n", setting.Program, attempt)
 	}
