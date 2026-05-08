@@ -1,22 +1,31 @@
 package app
 
 import (
+	"fmt"
 	"net"
 	"os"
 )
 
-func StartListener(path string, m *Manager) error {
+func StartSocketListener(path string, m *Manager) error {
+
 	_ = os.Remove(path)
+
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		return err
 	}
 
-	os.Chmod(path, 0660)
+	os.Chmod(path, 0666)
 
 	go func() {
 		for {
-			conn, _ := l.Accept()
+			conn, err := l.Accept()
+
+			if err != nil {
+				fmt.Printf("Error accepting connection: %v\n", err)
+				continue
+			}
+
 			go handleRequest(conn, m)
 		}
 	}()

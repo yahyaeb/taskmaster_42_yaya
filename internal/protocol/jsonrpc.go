@@ -116,11 +116,11 @@ func NewErrorRsponse(code int, message string) *RPCResponse {
 	}
 }
 
-func NewSuccessResponse(data interface{}) *RPCResponse {
+func NewSuccessResponse(data interface{}, id int) *RPCResponse {
 	return &RPCResponse{
 		Jsonrpc: "2.0",
 		Result:  data,
 		Error:   nil,
-		ID:      1,
+		ID:      id,
 	}
 }

@@ -353,7 +353,7 @@ func main() {
 	m := app.NewManager()
 
 	socketPath := "/tmp/taskmaster.sock"
-	err := app.StartSocketServer(socketPath, m)
+	err = app.StartSocketListener(socketPath, m)
 	if err != nil {
 		fmt.Printf("Error starting socket server: %v\n", err)
 		return
