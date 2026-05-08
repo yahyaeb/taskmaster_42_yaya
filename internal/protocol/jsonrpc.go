@@ -1,51 +1,3 @@
-package protocol
-
-// RPCRequest represents the standard JSON-RPC 2.0 request envelope
-type RPCRequest struct {
-	Jsonrpc string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params,omitempty"`
-	ID      int         `json:"id"`
-}
-
-// RPCResponse represents the standard JSON-RPC 2.0 response envelope
-type RPCResponse struct {
-	Jsonrpc string      `json:"jsonrpc"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *RPCError   `json:"error,omitempty"`
-	ID      int         `json:"id"`
-}
-
-type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-// --- Specific Results ---
-
-type ProcessInfo struct {
-	Name    string `json:"name"`   // e.g., "nginx:01"
-	Status  string `json:"status"` // From internal/bus: STARTING, RUNNING, etc.
-	Pid     int    `json:"pid"`
-	Uptime  string `json:"uptime"`
-	Retries int    `json:"retries"`
-}
-
-type ActionRequest struct {
-	Name string `json:"name"` // Program name or "all"
-}
-
-type ActionResponse struct {
-	Success bool   `json:"success"`
-	Message string `json:"message"`
-}
-
-type ReloadResponse struct {
-	Added     []string `json:"added"`
-	Removed   []string `json:"removed"`
-	Restarted []string `json:"restarted"`
-}
-
 /*
   // Request envelope (JSON-RPC 2.0)
   { "jsonrpc": "2.0", "method": "Taskmaster.Stop", "params": { "name": "nginx:01" }, "id": 1 }
@@ -104,3 +56,71 @@ Example Result for "Taskmaster.Shutdown":
 {"message": "Daemon shutting down..."}
 
 */
+
+package protocol
+
+// RPCRequest represents the standard JSON-RPC 2.0 request envelope
+type RPCRequest struct {
+	Jsonrpc string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params,omitempty"`
+	ID      int         `json:"id"`
+}
+
+// RPCResponse represents the standard JSON-RPC 2.0 response envelope
+type RPCResponse struct {
+	Jsonrpc string      `json:"jsonrpc"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   *RPCError   `json:"error,omitempty"`
+	ID      int         `json:"id"`
+}
+
+type RPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+// --- Specific Results ---
+
+type ProcessInfo struct {
+	Name    string `json:"name"`   // e.g., "nginx:01"
+	Status  string `json:"status"` // From internal/bus: STARTING, RUNNING, etc.
+	Pid     int    `json:"pid"`
+	Uptime  string `json:"uptime"`
+	Retries int    `json:"retries"`
+}
+
+type ActionRequest struct {
+	Name string `json:"name"` // Program name or "all"
+}
+
+type ActionResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type ReloadResponse struct {
+	Added     []string `json:"added"`
+	Removed   []string `json:"removed"`
+	Restarted []string `json:"restarted"`
+}
+
+func NewErrorRsponse(code int, message string) *RPCResponse {
+	return &RPCResponse{
+		Jsonrpc: "2.0",
+		Error: &RPCError{
+			Code:    code,
+			Message: message,
+		},
+		ID: 1,
+	}
+}
+
+func NewSuccessResponse(data interface{}) *RPCResponse {
+	return &RPCResponse{
+		Jsonrpc: "2.0",
+		Result:  data,
+		Error:   nil,
+		ID:      1,
+	}
+}
