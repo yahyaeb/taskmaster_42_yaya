@@ -8,17 +8,16 @@
 
 # Test binary, built with `go test -c`
 *.test
+
 # Output of the go coverage tool
 *.out
-# Output of the go coverage tool
-*.out
+*.cover
 coverage.txt
 coverage.html
+coverage/
 
 # Dependency directories
 vendor/
-go.sum
-go.mod
 
 # Go workspace file
 go.work
@@ -45,12 +44,19 @@ go.work
 
 # OS-specific
 Thumbs.db
-.DS_Store
 
 # Temporary files
 tmp/
 temp/
 *.log
 
-# Supervisor
-supervisor
+# Project-specific
+.context/
+
+# Repomix
+repomix-output.xml
+
+# Binary files
+*.bin
+daemon
+ctl
