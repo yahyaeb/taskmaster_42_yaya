@@ -21,6 +21,7 @@ type YAMLLoader struct{}
 
 // Load reads a YAML configuration file and returns parsed ConfigSpecs.
 // It expands instances based on Numprocs field.
+// Returns error if any spec fails validation.
 func (l *YAMLLoader) Load(path string) ([]ConfigSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -35,6 +36,11 @@ func (l *YAMLLoader) Load(path string) ([]ConfigSpec, error) {
 
 	var specs []ConfigSpec
 	for name, spec := range raw {
+		// Validate spec before expansion
+		if err := spec.Validate(); err != nil {
+			return nil, fmt.Errorf("validate spec %q: %w", name, err)
+		}
+
 		// Expand instances
 		numprocs := spec.Numprocs
 		if numprocs <= 0 {

@@ -5,7 +5,6 @@ import (
 	"net"
 	"os"
 	"testing"
-	"taskmaster/internal/app"
 	"taskmaster/internal/protocol"
 )
 
@@ -13,8 +12,8 @@ func TestDeamonCommunication(t *testing.T) {
 	socketPath := "/tmp/test_taskmaster.sock"
 	defer os.Remove(socketPath)
 
-	m := app.NewManager()
-	err := app.StartSocketListener(socketPath, m)
+	m := NewManager()
+	err := StartSocketListener(socketPath, m)
 	if err != nil {
 		t.Fatalf("Failed to start listener: %v", err)
 	}

@@ -1,4 +1,4 @@
-package internal
+package config
 
 import (
 	"os"
@@ -7,7 +7,7 @@ import (
 )
 
 func TestYAMLConfigLoader_Load(t *testing.T) {
-	loader := &YAMLConfigLoader{}
+	loader := &YAMLLoader{}
 	tmpDir := t.TempDir()
 
 	tests := []struct {
@@ -114,7 +114,7 @@ func TestYAMLConfigLoader_Load(t *testing.T) {
 }
 
 func TestYAMLConfigLoader_Load_MalformedYAML(t *testing.T) {
-	loader := &YAMLConfigLoader{}
+	loader := &YAMLLoader{}
 	tmpDir := t.TempDir()
 	tmpFile := filepath.Join(tmpDir, "bad.yaml")
 	// Invalid YAML: missing colon
@@ -129,7 +129,7 @@ func TestYAMLConfigLoader_Load_MalformedYAML(t *testing.T) {
 }
 
 func TestYAMLConfigLoader_Load_MissingFile(t *testing.T) {
-	loader := &YAMLConfigLoader{}
+	loader := &YAMLLoader{}
 	_, err := loader.Load("/nonexistent/path/to/config.yaml")
 	if err == nil {
 		t.Error("expected error for missing file, got nil")

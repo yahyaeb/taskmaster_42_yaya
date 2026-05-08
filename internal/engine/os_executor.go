@@ -25,20 +25,8 @@ func NewOsProcessExecutor() *OsProcessExecutor {
 	}
 }
 
-// Spawn starts a new process with the given command and arguments.
-// This simple version does not handle environment, working directory, or file redirection.
-// For full configuration, use SpawnWithConfig.
-func (e *OsProcessExecutor) Spawn(ctx context.Context, cmd string, args []string) (*Process, error) {
-	c := exec.CommandContext(ctx, cmd, args...)
-	err := c.Start()
-	if err != nil {
-		return nil, fmt.Errorf("spawn failed: %w", err)
-	}
-	return &Process{PID: c.Process.Pid}, nil
-}
 
-// SpawnWithConfig starts a new process with full configuration (env, workdir, stdio, etc.).
-func (e *OsProcessExecutor) SpawnWithConfig(ctx context.Context, spec config.ConfigSpec) (*Process, error) {
+func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (*Process, error) {
 	builder := &CommandBuilder{}
 	cmd, err := builder.BuildCommand(spec)
 	if err != nil {
@@ -61,7 +49,7 @@ func (e *OsProcessExecutor) SpawnWithConfig(ctx context.Context, spec config.Con
 	if err != nil {
 		// Close any opened files on error
 		e.closeFiles(cmd)
-		return nil, fmt.Errorf("spawn failed: %w", err)
+		return nil, fmt.Errorf("start failed: %w", err)
 	}
 
 	pid := cmd.Process.Pid

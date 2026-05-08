@@ -127,7 +127,7 @@ func (m *Manager) watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		var err error
 
 		if _, ok := m.executor.(engine.ConfigurableProcessExecutor); ok {
-			exitCode, err = watcher.RunWithConfig(ctx, *setting)
+			exitCode, err = watcher.Run(ctx, *setting)
 		} else {
 			exitCode, err = watcher.Run(ctx, parts[0], parts[1:])
 		}

@@ -1,4 +1,4 @@
-package internal
+package engine
 
 import (
 	"context"
@@ -45,13 +45,13 @@ func (m *MockProcessExecutor) Signal(ctx context.Context, pid int, signal interf
 // MockConfigurableProcessExecutor is a mock implementation of ConfigurableProcessExecutor.
 type MockConfigurableProcessExecutor struct {
 	*MockProcessExecutor
-	SpawnWithConfigFunc func(ctx context.Context, spec ConfigSpec) (*Process, error)
+	SpawnFunc func(ctx context.Context, spec ConfigSpec) (*Process, error)
 }
 
-// SpawnWithConfig calls the mocked SpawnWithConfig function.
-func (m *MockConfigurableProcessExecutor) SpawnWithConfig(ctx context.Context, spec ConfigSpec) (*Process, error) {
-	if m.SpawnWithConfigFunc != nil {
-		return m.SpawnWithConfigFunc(ctx, spec)
+// Spawn calls the mocked Spawn function.
+func (m *MockConfigurableProcessExecutor) Spawn(ctx context.Context, spec ConfigSpec) (*Process, error) {
+	if m.SpawnFunc != nil {
+		return m.SpawnFunc(ctx, spec)
 	}
 	return nil, nil
 }

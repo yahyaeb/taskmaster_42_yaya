@@ -20,10 +20,6 @@ func RetryStrategyFactory(autorestart string, exitcodes []int) RetryStrategy {
 // If expectedCodes is empty, all exit codes are unexpected (always restart).
 // Otherwise, only the keys with true values are considered expected exit codes.
 func RetryStrategyFromExpectedCodes(expectedCodes map[int]bool) RetryStrategy {
-	if expectedCodes == nil {
-		// Legacy behavior: nil means only exit code 0 is expected
-		return &UnexpectedOnlyRestart{AllowedCodes: []int{0}}
-	}
 	if len(expectedCodes) == 0 {
 		// No expected codes → always restart
 		return &AlwaysRestart{}

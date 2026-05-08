@@ -20,6 +20,7 @@ type ProcessWatcher struct {
 	Config           RetryConfig
 	Strategy         RetryStrategy // optional, if nil uses config.ExpectedCodes
 	OnProcessStarted func(pid int) // optional callback when a process starts
+	OnBackoff func(attempt int) 
 }
 
 // NewProcessWatcher creates a new ProcessWatcher with the given executor and retry config.
@@ -47,17 +48,20 @@ func NewProcessWatcherWithStrategy(executor ProcessExecutor, strategy RetryStrat
 }
 
 // ProcessSpawner is a function that spawns a process and returns it or an error.
-// Used to abstract the spawning mechanism (Spawn vs SpawnWithConfig).
+// Used to abstract the spawning mechanism (Spawn vs Start).
 type ProcessSpawner func(ctx context.Context) (*Process, error)
 
-// run is the core retry loop shared by Run and RunWithConfig.
-// It accepts a spawner function to abstract the spawn mechanism (Spawn vs SpawnWithConfig).
+// run is the core retry loop shared by Run.
+// It accepts a spawner function to abstract the spawn mechanism (Spawn vs Start).
 func (pw *ProcessWatcher) run(ctx context.Context, spawner ProcessSpawner) (ExitCode, error) {
 	var lastExit ExitCode
 	var lastErr error
 
 	for attempt := 0; attempt <= pw.Config.MaxRetries; attempt++ {
 		if attempt > 0 {
+			if pw.OnBackoff != nil {
+				pw.OnBackoff(attempt)
+			}
 			select {
 			case <-time.After(pw.Config.RetryDelay):
 			case <-ctx.Done():
@@ -111,22 +115,10 @@ func (pw *ProcessWatcher) run(ctx context.Context, spawner ProcessSpawner) (Exit
 	return lastExit, fmt.Errorf("process exited with code %d after %d retries", lastExit, pw.Config.MaxRetries)
 }
 
-// Run starts monitoring a process, applying retry strategy on exit.
-// Returns the final exit code or an error if the process cannot be started or all retries are exhausted.
-func (pw *ProcessWatcher) Run(ctx context.Context, cmd string, args []string) (ExitCode, error) {
-	return pw.run(ctx, func(ctx context.Context) (*Process, error) {
-		return pw.Executor.Spawn(ctx, cmd, args)
-	})
-}
 
-// RunWithConfig starts monitoring a process using ConfigurableProcessExecutor with full configuration.
-func (pw *ProcessWatcher) RunWithConfig(ctx context.Context, spec config.ConfigSpec) (ExitCode, error) {
-	configurable, ok := pw.Executor.(ConfigurableProcessExecutor)
-	if !ok {
-		return -1, fmt.Errorf("executor does not support SpawnWithConfig")
-	}
-
+// Run starts monitoring a process using ProcessExecutor with full configuration.
+func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec) (ExitCode, error) {	
 	return pw.run(ctx, func(ctx context.Context) (*Process, error) {
-		return configurable.SpawnWithConfig(ctx, spec)
+		return pw.Executor.Start(ctx, spec)
 	})
 }

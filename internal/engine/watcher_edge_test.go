@@ -1,4 +1,4 @@
-package internal
+package engine
 
 import (
 	"context"
@@ -122,14 +122,14 @@ func TestProcessWatcher_Run_NoCallbackWhenSpawnFails(t *testing.T) {
 	}
 }
 
-func TestProcessWatcher_RunWithConfig_NilStrategyUsesExpectedCodes(t *testing.T) {
+func TestProcessWatcher_Run_NilStrategyUsesExpectedCodes(t *testing.T) {
 	mock := &MockConfigurableProcessExecutor{
 		MockProcessExecutor: &MockProcessExecutor{
 			WaitFunc: func(ctx context.Context, pid int) (ExitCode, error) {
 				return 42, nil
 			},
 		},
-		SpawnWithConfigFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
+		SpawnFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
 			return &Process{PID: 777}, nil
 		},
 	}
@@ -144,9 +144,9 @@ func TestProcessWatcher_RunWithConfig_NilStrategyUsesExpectedCodes(t *testing.T)
 		Strategy: nil,
 	}
 	ctx := context.Background()
-	exitCode, err := watcher.RunWithConfig(ctx, ConfigSpec{})
+	exitCode, err := watcher.Run(ctx, ConfigSpec{})
 	if err != nil {
-		t.Fatalf("RunWithConfig failed: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 	if exitCode != 42 {
 		t.Errorf("expected exit code 42, got %d", exitCode)

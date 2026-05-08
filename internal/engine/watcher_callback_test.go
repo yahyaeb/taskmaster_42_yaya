@@ -1,4 +1,4 @@
-package internal
+package engine
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func TestProcessWatcher_OnProcessStartedCallback(t *testing.T) {
 	}
 }
 
-func TestProcessWatcher_RunWithConfig(t *testing.T) {
+func TestProcessWatcher_Run(t *testing.T) {
 	var spawnedSpec ConfigSpec
 	var spawnedPID int
 
@@ -56,7 +56,7 @@ func TestProcessWatcher_RunWithConfig(t *testing.T) {
 				return 0, nil
 			},
 		},
-		SpawnWithConfigFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
+		SpawnFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
 			spawnedSpec = spec
 			spawnedPID = 999
 			return &Process{PID: spawnedPID}, nil
@@ -74,9 +74,9 @@ func TestProcessWatcher_RunWithConfig(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	exitCode, err := watcher.RunWithConfig(ctx, spec)
+	exitCode, err := watcher.Run(ctx, spec)
 	if err != nil {
-		t.Fatalf("RunWithConfig failed: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0, got %d", exitCode)
@@ -95,7 +95,7 @@ func TestProcessWatcher_RunWithConfig(t *testing.T) {
 	}
 }
 
-func TestProcessWatcher_RunWithConfig_NonConfigurableExecutor(t *testing.T) {
+func TestProcessWatcher_Run_NonConfigurableExecutor(t *testing.T) {
 	mock := &MockProcessExecutor{
 		SpawnFunc: func(ctx context.Context, cmd string, args []string) (*Process, error) {
 			return &Process{PID: 111}, nil
@@ -110,17 +110,17 @@ func TestProcessWatcher_RunWithConfig_NonConfigurableExecutor(t *testing.T) {
 
 	spec := ConfigSpec{}
 	ctx := context.Background()
-	_, err := watcher.RunWithConfig(ctx, spec)
+	_, err := watcher.Run(ctx, spec)
 	if err == nil {
 		t.Error("expected error for non-configurable executor, got nil")
 	}
-	expectedErr := "executor does not support SpawnWithConfig"
+	expectedErr := "executor does not support Spawn"
 	if err != nil && err.Error() != expectedErr {
 		t.Errorf("expected error %q, got %v", expectedErr, err)
 	}
 }
 
-func TestProcessWatcher_RunWithConfig_RetryAndCallback(t *testing.T) {
+func TestProcessWatcher_Run_RetryAndCallback(t *testing.T) {
 	var callbacks []int
 	attempt := 0
 	
@@ -135,7 +135,7 @@ func TestProcessWatcher_RunWithConfig_RetryAndCallback(t *testing.T) {
 				return 0, nil
 			},
 		},
-		SpawnWithConfigFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
+		SpawnFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
 			return &Process{PID: 1000 + attempt}, nil
 		},
 	}
@@ -149,9 +149,9 @@ func TestProcessWatcher_RunWithConfig_RetryAndCallback(t *testing.T) {
 
 	spec := ConfigSpec{ProcessName: "test"}
 	ctx := context.Background()
-	exitCode, err := watcher.RunWithConfig(ctx, spec)
+	exitCode, err := watcher.Run(ctx, spec)
 	if err != nil {
-		t.Fatalf("RunWithConfig failed: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0, got %d", exitCode)
@@ -167,7 +167,7 @@ func TestProcessWatcher_RunWithConfig_RetryAndCallback(t *testing.T) {
 	}
 }
 
-func TestProcessWatcher_RunWithConfig_ContextCancellation(t *testing.T) {
+func TestProcessWatcher_Run_ContextCancellation(t *testing.T) {
 	mock := &MockConfigurableProcessExecutor{
 		MockProcessExecutor: &MockProcessExecutor{
 			WaitFunc: func(ctx context.Context, pid int) (ExitCode, error) {
@@ -176,7 +176,7 @@ func TestProcessWatcher_RunWithConfig_ContextCancellation(t *testing.T) {
 				return -1, ctx.Err()
 			},
 		},
-		SpawnWithConfigFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
+		SpawnFunc: func(ctx context.Context, spec ConfigSpec) (*Process, error) {
 			return &Process{PID: 999}, nil
 		},
 	}
@@ -188,7 +188,7 @@ func TestProcessWatcher_RunWithConfig_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 	
-	_, err := watcher.RunWithConfig(ctx, spec)
+	_, err := watcher.Run(ctx, spec)
 	if err == nil {
 		t.Error("expected error due to cancelled context")
 	}

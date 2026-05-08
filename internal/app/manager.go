@@ -112,6 +112,11 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		fmt.Printf("Started program %s with PID %d\n", setting.Program, pid)
 	}
 
+	watcher.OnBackoff = func(attempt int) {
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.BACKOFF, Pid: currentPID}
+		fmt.Printf("Program %s is backoff after %d attempts\n", setting.Program, attempt)
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -119,15 +124,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 	errCh := make(chan error, 1)
 
 	go func() {
-		var exitCode engine.ExitCode
-		var err error
-
-		if _, ok := m.executor.(engine.ConfigurableProcessExecutor); ok {
-			exitCode, err = watcher.RunWithConfig(ctx, *setting)
-		} else {
-			exitCode, err = watcher.Run(ctx, parts[0], parts[1:])
-		}
-
+		exitCode, err := watcher.Run(ctx, *setting)
 		if err != nil {
 			errCh <- err
 		} else {
