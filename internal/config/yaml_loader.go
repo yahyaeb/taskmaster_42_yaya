@@ -16,11 +16,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ConfigFile represents the top-level structure of the YAML configuration file.
-type ConfigFile struct {
-	Programs map[string]ConfigSpec `yaml:"programs"`
-}
-
 // YAMLLoader implements Loader for YAML configuration files.
 type YAMLLoader struct{}
 
@@ -33,17 +28,23 @@ func (l *YAMLLoader) Load(path string) ([]ConfigSpec, error) {
 		return nil, fmt.Errorf("read config file %s: %w", path, err)
 	}
 
-	var configFile ConfigFile
-	err = yaml.Unmarshal(data, &configFile)
+	// Parse flat YAML: each top-level key is a program name
+	var programs map[string]ConfigSpec
+	err = yaml.Unmarshal(data, &programs)
 	if err != nil {
 		return nil, fmt.Errorf("parse yaml: %w", err)
 	}
 
 	var specs []ConfigSpec
-	for name, spec := range configFile.Programs {
+	for name, spec := range programs {
 		// Set Program from map key if not already set
 		if spec.Program == "" {
 			spec.Program = name
+		}
+
+		// Apply default for Numprocs before validation
+		if spec.Numprocs <= 0 {
+			spec.Numprocs = 1
 		}
 
 		// Validate spec before expansion
@@ -52,11 +53,7 @@ func (l *YAMLLoader) Load(path string) ([]ConfigSpec, error) {
 		}
 
 		// Expand instances
-		numprocs := spec.Numprocs
-		if numprocs <= 0 {
-			numprocs = 1
-		}
-		for i := 0; i < numprocs; i++ {
+		for i := 0; i < spec.Numprocs; i++ {
 			instance := spec
 			instance.ProcessName = FormatInstanceName(name, i)
 			specs = append(specs, instance)

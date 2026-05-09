@@ -279,7 +279,7 @@ func TestYAMLLoader_Load_InvalidNumprocs(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yml")
 
-	// Numprocs is 0 (invalid)
+	// Numprocs is 0 (defaults to 1)
 	yaml := `server:
   program: /bin/server
   cmd: "server"
@@ -293,20 +293,14 @@ func TestYAMLLoader_Load_InvalidNumprocs(t *testing.T) {
 
 	specs, err := loader.Load(configPath)
 
-	// Assert: Load fails on validation
-	if err == nil {
-		t.Fatal("expected error for numprocs=0, got nil")
+	// Assert: Load succeeds with numprocs defaulting to 1
+	if err != nil {
+		t.Fatalf("expected no error for numprocs=0 (defaults to 1), got: %v", err)
 	}
 
-	// Assert: specs are nil or empty
-	if specs != nil && len(specs) > 0 {
-		t.Errorf("expected empty specs on validation error, got %d specs", len(specs))
-	}
-
-	// Assert: error mentions Numprocs validation
-	errStr := err.Error()
-	if !contains(errStr, "Numprocs") {
-		t.Errorf("expected error to mention Numprocs, got: %v", err)
+	// Assert: 1 spec created
+	if len(specs) != 1 {
+		t.Errorf("expected 1 spec (numprocs defaulted to 1), got %d specs", len(specs))
 	}
 }
 
@@ -583,11 +577,11 @@ func TestYAMLLoader_Load_FailsWhenSpecInvalid(t *testing.T) {
 	}
 }
 
-// should_fail_load_when_numprocs_invalid
-func TestYAMLLoader_Load_FailsWhenNumprocsInvalid(t *testing.T) {
+// should_default_numprocs_to_1_when_zero
+func TestYAMLLoader_Load_DefaultsNumprocsZero(t *testing.T) {
 	loader := &YAMLLoader{}
 	tmpDir := t.TempDir()
-	configPath := filepath.Join(tmpDir, "invalid_numprocs.yml")
+	configPath := filepath.Join(tmpDir, "config.yml")
 
 	yaml := `worker:
   program: /usr/bin/worker
@@ -602,20 +596,19 @@ func TestYAMLLoader_Load_FailsWhenNumprocsInvalid(t *testing.T) {
 
 	specs, err := loader.Load(configPath)
 
-	// Assert: Load returns error
-	if err == nil {
-		t.Fatal("expected error for numprocs=0, got nil")
+	// Assert: Load succeeds with numprocs defaulting to 1
+	if err != nil {
+		t.Fatalf("expected no error for numprocs=0 (defaults to 1), got: %v", err)
 	}
 
-	// Assert: specs are nil or empty
-	if specs != nil && len(specs) > 0 {
-		t.Errorf("expected empty specs on validation error, got %d specs", len(specs))
+	// Assert: 1 spec created
+	if len(specs) != 1 {
+		t.Errorf("expected 1 spec (numprocs defaulted to 1), got %d specs", len(specs))
 	}
 
-	// Assert: error mentions Numprocs
-	errStr := err.Error()
-	if !contains(errStr, "Numprocs") {
-		t.Errorf("expected error to mention Numprocs, got: %v", err)
+	// Assert: ProcessName is worker:00
+	if specs[0].ProcessName != "worker:00" {
+		t.Errorf("expected ProcessName 'worker:00', got '%s'", specs[0].ProcessName)
 	}
 }
 

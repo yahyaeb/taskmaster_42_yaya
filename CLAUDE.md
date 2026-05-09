@@ -32,7 +32,8 @@ Root:
   │   │   │   ├── func NewProcessWatcher
   │   │   │   ├── func NewProcessWatcherWithStrategy
   │   │   │   ├── type ProcessSpawner
-  │   │   │   └── func (pw *ProcessWatcher) Run
+  │   │   │   ├── func (pw *ProcessWatcher) Run
+  │   │   │   └── func procState
   │   │   ├── stopper.go
   │   │   │   ├── type ProcessStopper
   │   │   │   ├── func NewProcessStopper

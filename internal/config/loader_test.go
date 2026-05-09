@@ -75,6 +75,7 @@ func TestYAMLConfigLoader_Load(t *testing.T) {
 			name: "negative Numprocs (should default to 1)",
 			yamlContent: `test:
   program: /bin/echo
+  cmd: "hello"
   numprocs: -5`,
 			wantCount: 1,
 			checkInstance: func(t *testing.T, specs []ConfigSpec) {
@@ -87,6 +88,7 @@ func TestYAMLConfigLoader_Load(t *testing.T) {
 			name: "zero Numprocs (should default to 1)",
 			yamlContent: `test:
   program: /bin/echo
+  cmd: "hello"
   numprocs: 0`,
 			wantCount: 1,
 		},

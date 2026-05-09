@@ -33,25 +33,6 @@ Params: {"name": "nginx:01"} — use "all" to target everything
 
 
 ### bde-albu
-1. BACKOFF state emission (internal/app/manager.go)
-In the Watchdog loop, when a process exits and ShouldRestart returns true, emit BACKOFF before the retry delay:
-RUNNING → BACKOFF (emit update) → wait → STARTING → RUNNING
-If retries exhausted → emit FATAL.
-2. starttime guard (internal/app/manager.go)
-After spawn, don't emit RUNNING immediately. Start a timer for starttime seconds. If the process is still alive when it fires → emit RUNNING. If it dies before → it counts as a failed start, go to BACKOFF.
-3. umask in fork (internal/engine/os_executor.go)
-In Spawn, before the process starts:
-gosyscall.Umask(spec.Umask)
-Call it inside cmd.SysProcAttr or just before cmd.Start().
-4. Unix socket daemon (cmd/daemon/main.go)
-The main entry point that ties everything together:
-gonet.Listen("unix", "/tmp/taskmaster.sock")
-// for each connection:
-//   decode RPCRequest
-//   route method to Manager
-//   encode RPCResponse back
-Methods to route: GetStatus, Start, Stop, Restart, Reload, Shutdown.
-
 Shared contracts:
 
 Socket: /tmp/taskmaster.sock
