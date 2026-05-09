@@ -37,10 +37,13 @@ func main() {
 		return
 	}
 
+	
 	manager.Spawn(app.NewManager(), ctl.updates, ctl.stop)
 	signal.Notify(ctl.sighup, syscall.SIGHUP)
-
+	
 	go read(ctl.input)
+	
+	manager.SetUpdatesChannel(ctl.updates)
 
 	socketPath := "/tmp/taskmaster.sock"
 	_, err = app.StartSocketListener(socketPath, manager)

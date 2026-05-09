@@ -28,11 +28,20 @@ func (l *YAMLLoader) Load(path string) ([]ConfigSpec, error) {
 		return nil, fmt.Errorf("read config file %s: %w", path, err)
 	}
 
-	// Parse flat YAML: each top-level key is a program name
 	var programs map[string]ConfigSpec
-	err = yaml.Unmarshal(data, &programs)
-	if err != nil {
-		return nil, fmt.Errorf("parse yaml: %w", err)
+
+	// Try nested format first: {programs: {name: spec}}
+	var nested struct {
+		Programs map[string]ConfigSpec `yaml:"programs"`
+	}
+	if err := yaml.Unmarshal(data, &nested); err == nil && nested.Programs != nil {
+		programs = nested.Programs
+	} else {
+		// Fall back to flat format: {name: spec}
+		err = yaml.Unmarshal(data, &programs)
+		if err != nil {
+			return nil, fmt.Errorf("parse yaml: %w", err)
+		}
 	}
 
 	var specs []ConfigSpec

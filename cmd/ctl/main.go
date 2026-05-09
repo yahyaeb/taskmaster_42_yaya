@@ -58,7 +58,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println(`
+	fmt.Print(`
 Usage: ctl [command] [args]
 
 Commands:

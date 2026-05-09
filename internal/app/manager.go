@@ -10,7 +10,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
+	
+    
 	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
 	"taskmaster/internal/engine"
@@ -173,12 +174,6 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance, up
 	if len(parts) == 0 {
 		slog.Error("no command specified for program", "program", setting.Program)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
-		return
-	}
-
-	if !setting.Autostart {
-		slog.Info("program set to not autostart, skipping", "program", setting.Program)
-		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
 		return
 	}
 
@@ -396,6 +391,12 @@ func (curr *Manager) Spawn(prev *Manager, updates chan bus.ProcessUpdate, stops 
 
 			if _, ok := stops[name]; !ok {
 				stops[name] = make(chan struct{})
+			}
+
+			if !setting.Autostart {
+				slog.Info("program set to not autostart, skipping", "program", setting.Program)
+				updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
+				continue
 			}
 
 			go curr.Watchdog(setting, curr.Process[name], updates, stops[name])

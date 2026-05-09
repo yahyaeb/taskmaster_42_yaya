@@ -95,24 +95,24 @@ Root:
   │       │   ├── func handleRestart
   │       │   ├── func handleReload
   │       │   └── func handleShutdown
- │       ├── manager.go
- │       │   ├── type ProcessInstance
- │       │   ├── func (pi *ProcessInstance) GetStatus
- │       │   ├── func (pi *ProcessInstance) SetStatus
- │       │   ├── func (pi *ProcessInstance) GetPid
- │       │   ├── func (pi *ProcessInstance) SetPid
- │       │   ├── func (pi *ProcessInstance) SetStateOnStart
- │       │   ├── func (pi *ProcessInstance) SetStateOnRunning
- │       │   ├── func (pi *ProcessInstance) SetStateOnBackoff
- │       │   ├── func (pi *ProcessInstance) State
- │       │   ├── type Manager
- │       │   ├── func NewManager
- │       │   ├── func (m *Manager) Watchdog
- │       │   ├── func sendFinalUpdate
- │       │   ├── func Stop
- │       │   ├── func Spawn
- │       │   ├── func Load
- │       │   └── func closeChannel
+  │       ├── manager.go
+  │       │   ├── type ProcessInstance
+  │       │   ├── func (pi *ProcessInstance) GetStatus
+  │       │   ├── func (pi *ProcessInstance) SetStatus
+  │       │   ├── func (pi *ProcessInstance) GetPid
+  │       │   ├── func (pi *ProcessInstance) SetPid
+  │       │   ├── func (pi *ProcessInstance) SetStateOnStart
+  │       │   ├── func (pi *ProcessInstance) SetStateOnRunning
+  │       │   ├── func (pi *ProcessInstance) SetStateOnBackoff
+  │       │   ├── func (pi *ProcessInstance) State
+  │       │   ├── type Manager
+  │       │   ├── func NewManager
+  │       │   ├── func (m *Manager) Watchdog
+  │       │   ├── func sendFinalUpdate
+  │       │   ├── func Stop
+  │       │   ├── func Spawn
+  │       │   ├── func Load
+  │       │   └── func closeChannel
   │       └── *_test.go
   ├── cmd/
   │   ├── daemon/
