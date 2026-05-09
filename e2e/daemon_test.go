@@ -69,6 +69,7 @@ type daemon struct {
 
 // startDaemon launches the daemon with config written to a temp dir.
 // Daemon stderr (slog output) is captured to d.logFile for log assertions.
+// Logs are stored in e2e/logs/ for easy debugging.
 func startDaemon(t *testing.T, config string) *daemon {
 	t.Helper()
 
@@ -78,7 +79,13 @@ func startDaemon(t *testing.T, config string) *daemon {
 		t.Fatalf("startDaemon: write config: %v", err)
 	}
 
-	logFile, err := os.CreateTemp(t.TempDir(), "daemon-*.log")
+	// Create persistent logs directory for debugging
+	logsDir := filepath.Join("logs")
+	os.MkdirAll(logsDir, 0755)
+
+	// Use test name and timestamp for unique log filename
+	logPath := filepath.Join(logsDir, fmt.Sprintf("%s-%d.log", t.Name(), time.Now().Unix()))
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		t.Fatalf("startDaemon: create log file: %v", err)
 	}

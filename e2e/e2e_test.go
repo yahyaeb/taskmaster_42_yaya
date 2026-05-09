@@ -105,12 +105,15 @@ func Test07_should_return_success_when_Stop_called_after_Start(t *testing.T) {
 	startDaemon(t, sleeperConf(false))
 
 	rpcCall(t, "Taskmaster.Start", map[string]any{"name": "sleeper:00"})
-	pollStatus(t, "sleeper:00", "running", 5*time.Second)
+	status := pollStatus(t, "sleeper:00", "running", 5*time.Second)
+	if status != "running" {
+		t.Fatalf("expected 'running', got %q", status)
+	}
 
 	resp := rpcCall(t, "Taskmaster.Stop", map[string]any{"name": "sleeper:00"})
 	assertSuccess(t, resp)
 
-	status := pollStatus(t, "sleeper:00", "stopped", 5*time.Second)
+	status = pollStatus(t, "sleeper:00", "stopped", 5*time.Second)
 	if status != "stopped" {
 		t.Fatalf("expected 'stopped', got %q", status)
 	}

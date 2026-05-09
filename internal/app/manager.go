@@ -395,7 +395,6 @@ func (curr *Manager) Spawn(prev *Manager, updates chan bus.ProcessUpdate, stops 
 
 			if !setting.Autostart {
 				slog.Info("program set to not autostart, skipping", "program", setting.Program)
-				updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
 				continue
 			}
 

@@ -50,6 +50,9 @@ tmp/
 temp/
 *.log
 
+# E2E test logs (for debugging)
+e2e/logs/
+
 # Project-specific
 .context/
 
