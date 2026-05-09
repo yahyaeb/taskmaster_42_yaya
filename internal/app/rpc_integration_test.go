@@ -42,9 +42,9 @@ func TestIntegration_GetStatus_EndToEnd(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -108,9 +108,9 @@ func TestIntegration_UnknownMethod_ReturnsMethodNotFound(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -172,9 +172,9 @@ func TestIntegration_MalformedJSON_ReturnsParseError(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -246,9 +246,9 @@ func TestIntegration_ConcurrentRequests_AllHandled(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -340,9 +340,9 @@ func TestIntegration_SequentialConnections_AllSucceed(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -409,9 +409,9 @@ func TestIntegration_Reload_EndToEnd(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -444,13 +444,9 @@ func TestIntegration_Reload_EndToEnd(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	// Expect error since manager.Reload is not fully implemented
-	if resp.Error == nil {
-		t.Error("expected error since manager.Reload is not fully implemented, got success")
-	} else {
-		if resp.Error.Code != protocol.OperationFailed {
-			t.Errorf("expected error code %d (OperationFailed), got %d", protocol.OperationFailed, resp.Error.Code)
-		}
+	// Reload now returns success (empty diff since no config changes)
+	if resp.Error != nil {
+		t.Errorf("unexpected error: code=%d msg=%s", resp.Error.Code, resp.Error.Message)
 	}
 
 	if resp.ID != 99 {
@@ -478,9 +474,9 @@ func TestIntegration_Shutdown_EndToEnd(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -546,9 +542,9 @@ func TestIntegration_StartProcess_ReturnsOperationFailed(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -614,9 +610,9 @@ func TestIntegration_StopProcess_ReturnsOperationFailed(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -682,9 +678,9 @@ func TestIntegration_RestartProcess_ReturnsOperationFailed(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -747,9 +743,9 @@ func TestIntegration_StartWithoutName_ReturnsInvalidParams(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)
@@ -817,9 +813,9 @@ func TestIntegration_GetStatusUnknownProcess_ReturnsNotFound(t *testing.T) {
 	}
 
 	socketPath := filepath.Join(tmpDir, "taskmaster_test.sock")
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("failed to load config: %v", err)
+		t.Fatalf("failed to load NewManagerFromConfig: %v", err)
 	}
 
 	listener, err := StartSocketListener(socketPath, manager)

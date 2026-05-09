@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -15,16 +17,32 @@ import (
 	"taskmaster/internal/protocol"
 )
 
-// ManagerInterface defines the boundary for RPC handlers.
-// Handlers use this interface; production uses *Manager which implements it.
-type ManagerInterface interface {
+// ProcessQuerier defines methods for querying process status.
+type ProcessQuerier interface {
 	GetProcessInfo(name string) (protocol.ProcessInfo, error)
 	GetAllProcessInfo() ([]protocol.ProcessInfo, error)
+}
+
+// ProcessController defines methods for controlling individual processes.
+type ProcessController interface {
 	Start(name string) error
 	Stop(name string) error
 	Restart(name string) error
-	Reload() error
+}
+
+// DaemonController defines methods for daemon-level operations.
+type DaemonController interface {
+	Reload() (*ReloadResult, error)
 	Shutdown() error
+}
+
+// ManagerInterface defines the boundary for RPC handlers.
+// Handlers use this interface; production uses *Manager which implements it.
+// Composed of smaller focused interfaces for better segregation.
+type ManagerInterface interface {
+	ProcessQuerier
+	ProcessController
+	DaemonController
 }
 
 type ProcessInstance struct {
@@ -35,6 +53,17 @@ type ProcessInstance struct {
 	Intended   bool
 	Strategy   engine.RetryStrategy
 	Mu         sync.RWMutex
+}
+
+// newProcessInstance creates a new ProcessInstance with the given autostart setting
+// and optional retry strategy. This factory ensures consistent initialization.
+func newProcessInstance(autostart bool, strategy engine.RetryStrategy) *ProcessInstance {
+	return &ProcessInstance{
+		Status:     bus.STOPPED,
+		Intended:   autostart,
+		RetryCount: 0,
+		Strategy:   strategy,
+	}
 }
 
 func (pi *ProcessInstance) GetStatus() bus.Status {
@@ -95,33 +124,60 @@ type Manager struct {
 	executor engine.ProcessExecutor
 	handler  engine.SignalHandler
 	Mu       sync.RWMutex
+
+	// stops tracks active watchdog stop channels for each process
+	stops map[string]chan struct{}
+	// updates channel for process status updates
+	updates chan bus.ProcessUpdate
+	// shutdownFunc is called when Shutdown() is invoked
+	shutdownFunc func()
+	// configPath stores the path used during NewManagerFromConfig() for Reload()
+	configPath string
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		Config:   make(map[string]*config.ConfigSpec),
 		Process:  make(map[string]*ProcessInstance),
+		stops:    make(map[string]chan struct{}),
 		executor: engine.NewOsProcessExecutor(),
 		handler:  &engine.OSSignalHandler{},
 	}
 }
 
-func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessUpdate, stop chan struct{}) {
+// SetUpdatesChannel sets the channel for receiving process updates.
+// Must be called before Start/Reload operations.
+func (m *Manager) SetUpdatesChannel(updates chan bus.ProcessUpdate) {
+	m.updates = updates
+}
+
+// SetShutdownFunc sets the function to call when Shutdown is requested.
+func (m *Manager) SetShutdownFunc(fn func()) {
+	m.shutdownFunc = fn
+}
+
+// isRunning returns true if the watchdog is running for the given process.
+func (m *Manager) isRunning(name string) bool {
+	_, exists := m.stops[name]
+	return exists
+}
+
+func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance, updates chan bus.ProcessUpdate, stop chan struct{}) {
 	parts := strings.Fields(setting.Cmd)
 	if len(parts) == 0 {
-		fmt.Printf("No command specified for program %s\n", setting.Program)
+		slog.Error("no command specified for program", "program", setting.Program)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
 		return
 	}
 
 	if !setting.Autostart {
-		fmt.Printf("Program %s is set to not autostart, skipping...\n", setting.Program)
+		slog.Info("program set to not autostart, skipping", "program", setting.Program)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
 		return
 	}
 
 	var strategy engine.RetryStrategy
-	if proc, ok := m.Process[setting.ProcessName]; ok && proc.Strategy != nil {
+	if proc != nil && proc.Strategy != nil {
 		strategy = proc.Strategy
 	} else {
 		strategy = engine.RetryStrategyFactory(setting.Autorestart, setting.Exitcodes)
@@ -140,9 +196,8 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		pidMu      sync.RWMutex
 	)
 
-	proc, ok := m.Process[setting.ProcessName]
-	if !ok {
-		fmt.Printf("Error: ProcessInstance for %s not found in manager\n", setting.ProcessName)
+	if proc == nil {
+		slog.Error("ProcessInstance not found in manager", "process", setting.ProcessName)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
 		return
 	}
@@ -155,9 +210,8 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		proc.SetStateOnStart(pid)
 
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.RUNNING, Pid: pid}
-		fmt.Printf("Started program %s with PID %d\n", setting.Program, pid)
+		slog.Info("started program", "program", setting.Program, "pid", pid)
 	}
-	
 
 	watcher.OnBackoff = func(attempt int) {
 		proc.SetStateOnBackoff(attempt)
@@ -165,7 +219,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		pid := currentPID
 		pidMu.RUnlock()
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.BACKOFF, Pid: pid}
-		fmt.Printf("Program %s is backoff after %d attempts\n", setting.Program, attempt)
+		slog.Info("program backoff", "program", setting.Program, "attempt", attempt)
 	}
 
 	watcher.OnSpawnFailed = func(attempt int) {
@@ -199,7 +253,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 			stopper := engine.NewProcessStopper(m.handler, m.executor, time.Duration(setting.Stoptime)*time.Second)
 			p := &engine.Process{PID: pid}
 			if err := stopper.Stop(p); err != nil {
-				fmt.Printf("Error stopping program %s: %v\n", setting.Program, err)
+				slog.Error("error stopping program", "program", setting.Program, "error", err)
 			}
 		}
 
@@ -207,10 +261,10 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		case code := <-result:
 			sendFinalUpdate(setting, updates, code, true)
 		case err := <-errCh:
-			fmt.Printf("Program %s exited with error after stop: %v\n", setting.Program, err)
+			slog.Error("program exited with error after stop", "program", setting.Program, "error", err)
 			updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
 		case <-time.After(time.Duration(setting.Stoptime) * time.Second):
-			fmt.Printf("Program %s did not exit after stop timeout\n", setting.Program)
+			slog.Error("program did not exit after stop timeout", "program", setting.Program)
 			updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
 		}
 
@@ -218,51 +272,63 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		sendFinalUpdate(setting, updates, code, false)
 
 	case err := <-errCh:
-		fmt.Printf("Program %s exited with error: %v\n", setting.Program, err)
+		slog.Error("program exited with error", "program", setting.Program, "error", err)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
 	}
 }
 
 func sendFinalUpdate(setting *config.ConfigSpec, updates chan bus.ProcessUpdate, code engine.ExitCode, stopped bool) {
+	if stopped {
+		if code == 0 {
+			slog.Info("program stopped successfully", "program", setting.Program)
+		} else {
+			slog.Error("program stopped with non-zero exit code", "program", setting.Program, "code", code)
+		}
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
+		return
+	}
+
 	if code == 0 {
-		fmt.Printf("Program %s exited successfully\n", setting.Program)
+		slog.Info("program exited successfully", "program", setting.Program)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
 	} else {
-		fmt.Printf("Program %s exited with code %d\n", setting.Program, code)
+		slog.Error("program exited with code", "program", setting.Program, "code", code)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
 	}
 }
 
-func Stop(manager *Manager, stops map[string]chan struct{}) {
+// StopAll stops all managed processes by signaling their watchdogs and waiting for them to exit.
+// It closes all stop channels and force-kills any remaining processes after timeout.
+func (m *Manager) StopAll(stops map[string]chan struct{}) {
 	for name, ch := range stops {
 		if ch != nil {
 			closeChannel(ch)
 			delete(stops, name)
-			fmt.Printf("Stopped program %s\n", name)
+			slog.Info("stopped program", "name", name)
 		}
 	}
 
-	manager.Mu.RLock()
+	m.Mu.RLock()
 	maxStoptime := 0
-	for _, cfg := range manager.Config {
+	for _, cfg := range m.Config {
 		if cfg.Stoptime > maxStoptime {
 			maxStoptime = cfg.Stoptime
 		}
 	}
-	manager.Mu.RUnlock()
+	m.Mu.RUnlock()
 
 	timeout := time.Now().Add(time.Duration(maxStoptime+3) * time.Second)
 	for time.Now().Before(timeout) {
-		manager.Mu.RLock()
+		m.Mu.RLock()
 		stopped := true
-		for _, proc := range manager.Process {
+		for _, proc := range m.Process {
 			pid, status := proc.State()
 			if pid > 0 && status == bus.RUNNING {
 				stopped = false
 				break
 			}
 		}
-		manager.Mu.RUnlock()
+		m.Mu.RUnlock()
 
 		if stopped {
 			break
@@ -270,18 +336,21 @@ func Stop(manager *Manager, stops map[string]chan struct{}) {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	manager.Mu.Lock()
-	for _, proc := range manager.Process {
+	m.Mu.Lock()
+	for _, proc := range m.Process {
 		pid, _ := proc.State()
 		if pid > 0 {
 			p, _ := os.FindProcess(pid)
 			_ = p.Kill()
 		}
 	}
-	manager.Mu.Unlock()
+	m.Mu.Unlock()
 }
 
-func Spawn(prev *Manager, curr *Manager, updates chan bus.ProcessUpdate, stops map[string]chan struct{}) {
+// Spawn starts watchdogs for new processes in the current manager config
+// and stops watchdogs for processes that exist in prev but not in current.
+// This is typically called during initial load or hot-reload.
+func (curr *Manager) Spawn(prev *Manager, updates chan bus.ProcessUpdate, stops map[string]chan struct{}) {
 	curr.Mu.Lock()
 	defer curr.Mu.Unlock()
 
@@ -304,20 +373,15 @@ func Spawn(prev *Manager, curr *Manager, updates chan bus.ProcessUpdate, stops m
 		if !found {
 			if _, ok := curr.Process[name]; !ok {
 				strategy := engine.RetryStrategyFactory(setting.Autorestart, setting.Exitcodes)
-				curr.Process[name] = &ProcessInstance{
-					Status:     bus.STOPPED,
-					Intended:   true,
-					RetryCount: 0,
-					Strategy:   strategy,
-				}
+				curr.Process[name] = newProcessInstance(true, strategy)
 			}
 
 			if _, ok := stops[name]; !ok {
 				stops[name] = make(chan struct{})
 			}
 
-			go curr.Watchdog(setting, updates, stops[name])
-			fmt.Printf("Started new program %s\n", setting.ProcessName)
+			go curr.Watchdog(setting, curr.Process[name], updates, stops[name])
+			slog.Info("started new program", "name", setting.ProcessName)
 		}
 	}
 
@@ -327,12 +391,14 @@ func Spawn(prev *Manager, curr *Manager, updates chan bus.ProcessUpdate, stops m
 				closeChannel(ch)
 				delete(stops, prevName)
 			}
-			fmt.Printf("Stopped removed program %s\n", prevName)
+			slog.Info("stopped removed program", "name", prevName)
 		}
 	}
 }
 
-func Load(path string) (*Manager, error) {
+// NewManagerFromConfig loads configuration from the specified path and creates
+// a Manager with all configured processes. The config path is stored for later Reload().
+func NewManagerFromConfig(path string) (*Manager, error) {
 	loader := &config.YAMLLoader{}
 	specs, err := loader.Load(path)
 	if err != nil {
@@ -343,23 +409,28 @@ func Load(path string) (*Manager, error) {
 	manager.Mu.Lock()
 	defer manager.Mu.Unlock()
 
+	// Store config path for Reload()
+	manager.configPath = path
+
 	for i := range specs {
 		spec := &specs[i]
 		manager.Config[spec.ProcessName] = spec
 		if _, ok := manager.Process[spec.ProcessName]; !ok {
-			manager.Process[spec.ProcessName] = &ProcessInstance{
-				Status:     bus.STOPPED,
-				Intended:   spec.Autostart,
-				RetryCount: 0,
-			}
+			manager.Process[spec.ProcessName] = newProcessInstance(spec.Autostart, nil)
 		}
 	}
 
 	return manager, nil
 }
 
+// closeChannel closes a channel safely, recovering from double-close panics.
+// Logs at debug level if a panic occurs to aid debugging without crashing.
 func closeChannel(ch chan struct{}) {
-	defer func() { recover() }()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Debug("channel already closed", "reason", r)
+		}
+	}()
 	close(ch)
 }
 
@@ -437,80 +508,267 @@ func formatUptime(startTime time.Time) string {
 }
 
 // Start starts a single process by name.
-// Returns error if process not found or start operation fails.
+// Returns error if process not found, updates channel not set, or start operation fails.
+// If the process watchdog is already running, returns success (idempotent).
 func (m *Manager) Start(name string) error {
 	m.Mu.Lock()
 	defer m.Mu.Unlock()
 
-	proc, exists := m.Process[name]
+	if m.updates == nil {
+		return fmt.Errorf("updates channel not set, call SetUpdatesChannel first")
+	}
+
+	configSpec, exists := m.Config[name]
 	if !exists {
 		return fmt.Errorf("process not found: %s", name)
 	}
 
-	// Check if already running
-	if proc.GetStatus() == bus.RUNNING {
+	// Check if watchdog is already running
+	if m.isRunning(name) {
 		return nil // Idempotent: already running is not an error
 	}
 
-	// TODO: Trigger actual process start via watchdog
-	// For now, update status to indicate intent
-	proc.SetStatus(bus.STARTING)
+	// Ensure ProcessInstance exists
+	if _, ok := m.Process[name]; !ok {
+		strategy := engine.RetryStrategyFactory(configSpec.Autorestart, configSpec.Exitcodes)
+		m.Process[name] = newProcessInstance(true, strategy)
+	}
+
+	// Create stop channel for this watchdog
+	stopChan := make(chan struct{})
+	m.stops[name] = stopChan
+
+	// Set process as starting
+	m.Process[name].SetStatus(bus.STARTING)
+
+	// Spawn watchdog goroutine
+	go m.Watchdog(configSpec, m.Process[name], m.updates, stopChan)
+
+	slog.Info("RPC Start requested", "name", name)
 	return nil
 }
 
 // Stop stops a single process by name.
 // Returns error if process not found or stop operation fails.
+// Signals the watchdog to stop the process gracefully.
 func (m *Manager) Stop(name string) error {
 	m.Mu.Lock()
-	defer m.Mu.Unlock()
 
-	proc, exists := m.Process[name]
+	_, exists := m.Config[name]
 	if !exists {
+		m.Mu.Unlock()
 		return fmt.Errorf("process not found: %s", name)
 	}
 
-	// Check if already stopped
-	if proc.GetStatus() == bus.STOPPED {
-		return nil // Idempotent: already stopped is not an error
+	// Check if watchdog is running
+	stopChan, running := m.stops[name]
+	if !running {
+		m.Mu.Unlock()
+		return nil // Idempotent: not running is not an error
 	}
 
-	pid := proc.GetPid()
+	// Get the process instance for PID (may not exist if never started)
+	pid := 0
+	if proc, ok := m.Process[name]; ok {
+		pid = proc.GetPid()
+	}
+	m.Mu.Unlock()
+
+	// Signal watchdog to stop by closing the stop channel
+	closeChannel(stopChan)
+
+	// Also try to signal the process directly if we have a PID
 	if pid > 0 {
 		p, err := os.FindProcess(pid)
 		if err == nil {
-			// Try graceful termination first
 			p.Signal(syscall.SIGTERM)
 		}
 	}
 
-	proc.SetStatus(bus.STOPPED)
+	// Remove from stops map and update status
+	m.Mu.Lock()
+	delete(m.stops, name)
+	if proc, ok := m.Process[name]; ok {
+		proc.SetStatus(bus.STOPPED)
+	}
+	m.Mu.Unlock()
+
+	slog.Info("RPC Stop requested", "name", name)
 	return nil
 }
 
 // Restart restarts a single process by name.
 // Returns error if process not found or restart operation fails.
+// Waits briefly between stop and start to allow cleanup.
 func (m *Manager) Restart(name string) error {
-	// Stop then start
+	// Stop the process
 	if err := m.Stop(name); err != nil {
 		return err
 	}
+
+	// Brief wait to allow process cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	// Start the process
 	return m.Start(name)
 }
 
-// Reload reloads the configuration.
-// Currently returns not implemented - full implementation requires config file parsing.
-func (m *Manager) Reload() error {
-	return fmt.Errorf("reload not fully implemented")
+// ReloadResult contains the diff of configuration changes.
+type ReloadResult struct {
+	Added     []string
+	Removed   []string
+	Restarted []string
 }
 
-// Shutdown shuts down the daemon.
-// Stops all managed processes gracefully.
-func (m *Manager) Shutdown() error {
+// Reload reloads the configuration from disk and applies the diff.
+// Loads config from the path used during NewManagerFromConfig() and applies changes.
+// Returns added, removed, and restarted process names.
+func (m *Manager) Reload() (*ReloadResult, error) {
+	m.Mu.RLock()
+	configPath := m.configPath
+	m.Mu.RUnlock()
+
+	if configPath == "" {
+		return nil, fmt.Errorf("no config path stored, use NewManagerFromConfig() to initialize Manager")
+	}
+
+	// Load new config from disk
+	loader := &config.YAMLLoader{}
+	specs, err := loader.Load(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("reload config: %w", err)
+	}
+
+	// Convert specs to config map
+	newConfig := make(map[string]*config.ConfigSpec)
+	for i := range specs {
+		spec := &specs[i]
+		newConfig[spec.ProcessName] = spec
+	}
+
+	// Apply the diff
+	return m.ReloadFromConfig(newConfig)
+}
+
+// ReloadFromConfig applies a new configuration to the manager.
+// Stops removed processes, starts added ones, restarts changed ones.
+func (m *Manager) ReloadFromConfig(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
 	m.Mu.Lock()
 	defer m.Mu.Unlock()
 
-	for name := range m.Process {
-		proc := m.Process[name]
+	result := &ReloadResult{
+		Added:     []string{},
+		Removed:   []string{},
+		Restarted: []string{},
+	}
+
+	// Find removed processes
+	for name := range m.Config {
+		if _, exists := newConfig[name]; !exists {
+			result.Removed = append(result.Removed, name)
+		}
+	}
+
+	// Find added and changed processes
+	for name, newSpec := range newConfig {
+		if oldSpec, exists := m.Config[name]; !exists {
+			result.Added = append(result.Added, name)
+			// Add to config and create process instance
+			m.Config[name] = newSpec
+			if _, ok := m.Process[name]; !ok {
+				strategy := engine.RetryStrategyFactory(newSpec.Autorestart, newSpec.Exitcodes)
+				m.Process[name] = newProcessInstance(newSpec.Autostart, strategy)
+			}
+			// If autostart, start the watchdog
+			if newSpec.Autostart && m.updates != nil {
+				stopChan := make(chan struct{})
+				m.stops[name] = stopChan
+				go m.Watchdog(newSpec, m.Process[name], m.updates, stopChan)
+			}
+		} else if configChanged(oldSpec, newSpec) {
+			result.Restarted = append(result.Restarted, name)
+			// Update config
+			m.Config[name] = newSpec
+			// Restart if running or if autostart is true
+			wasRunning := m.isRunning(name)
+			if wasRunning {
+				if ch, ok := m.stops[name]; ok {
+					closeChannel(ch)
+					delete(m.stops, name)
+				}
+			}
+			// Restart immediately if autostart is true
+			if newSpec.Autostart && m.updates != nil {
+				stopChan := make(chan struct{})
+				m.stops[name] = stopChan
+				go m.Watchdog(newSpec, m.Process[name], m.updates, stopChan)
+			}
+		}
+	}
+
+	// Stop removed processes
+	for _, name := range result.Removed {
+		if ch, ok := m.stops[name]; ok {
+			closeChannel(ch)
+			delete(m.stops, name)
+		}
+		delete(m.Config, name)
+		// Don't delete from Process map - keep for status history
+		if proc, ok := m.Process[name]; ok {
+			proc.SetStatus(bus.STOPPED)
+		}
+	}
+
+	return result, nil
+}
+
+// configChanged returns true if two config specs are different.
+func configChanged(a, b *config.ConfigSpec) bool {
+	if a.Cmd != b.Cmd ||
+		a.Numprocs != b.Numprocs ||
+		a.NumprocsStart != b.NumprocsStart ||
+		a.Umask != b.Umask ||
+		a.Workingdir != b.Workingdir ||
+		a.Autostart != b.Autostart ||
+		a.Autorestart != b.Autorestart ||
+		a.Startretries != b.Startretries ||
+		a.Starttime != b.Starttime ||
+		a.Stopsignal != b.Stopsignal ||
+		a.Stoptime != b.Stoptime ||
+		a.Stdout != b.Stdout ||
+		a.Stderr != b.Stderr {
+		return true
+	}
+	// Compare slices
+	if !slices.Equal(a.Exitcodes, b.Exitcodes) {
+		return true
+	}
+	// Compare env maps
+	if len(a.Env) != len(b.Env) {
+		return true
+	}
+	for k, v := range a.Env {
+		if b.Env[k] != v {
+			return true
+		}
+	}
+	return false
+}
+
+// Shutdown shuts down the daemon.
+// Stops all managed processes gracefully and signals daemon exit.
+func (m *Manager) Shutdown() error {
+	m.Mu.Lock()
+
+	// Signal all processes to stop, including those without active watchdogs
+	for name, proc := range m.Process {
+		// Stop watchdog if running
+		if stopChan, ok := m.stops[name]; ok {
+			closeChannel(stopChan)
+			delete(m.stops, name)
+		}
+
+		// Signal process directly if it has a PID
 		pid := proc.GetPid()
 		if pid > 0 {
 			p, err := os.FindProcess(pid)
@@ -520,5 +778,12 @@ func (m *Manager) Shutdown() error {
 		}
 		proc.SetStatus(bus.STOPPED)
 	}
+	m.Mu.Unlock()
+
+	// Signal daemon to exit
+	if m.shutdownFunc != nil {
+		go m.shutdownFunc()
+	}
+
 	return nil
 }

@@ -166,10 +166,15 @@ func handleReload(req *protocol.RPCRequest, manager ManagerInterface) *protocol.
 		return protocol.NewErrorResponse(protocol.InvalidParams, "Reload does not accept a name", req.ID)
 	}
 
-	if err := manager.Reload(); err != nil {
+	result, err := manager.Reload()
+	if err != nil {
 		return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
 	}
-	return protocol.NewSuccessResponse(protocol.ReloadResponse{Added: []string{}, Removed: []string{}, Restarted: []string{}}, req.ID)
+	return protocol.NewSuccessResponse(protocol.ReloadResponse{
+		Added:     result.Added,
+		Removed:   result.Removed,
+		Restarted: result.Restarted,
+	}, req.ID)
 }
 
 func handleShutdown(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {

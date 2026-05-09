@@ -31,13 +31,13 @@ func main() {
 		sighup:  make(chan os.Signal, 1),
 	}
 
-	manager, err := app.Load("config.yml")
+	manager, err := app.NewManagerFromConfig("config.yml")
 	if err != nil {
 		fmt.Printf("Error loading configuration: %v\n", err)
 		return
 	}
 
-	app.Spawn(app.NewManager(), manager, ctl.updates, ctl.stop)
+	manager.Spawn(app.NewManager(), ctl.updates, ctl.stop)
 	signal.Notify(ctl.sighup, syscall.SIGHUP)
 
 	go read(ctl.input)
@@ -57,13 +57,13 @@ func main() {
 		case <-ctl.sighup:
 			fmt.Println("Hot-reloading configuration...")
 
-			newManager, err := app.Load("config.yml")
+			newManager, err := app.NewManagerFromConfig("config.yml")
 			if err != nil {
 				fmt.Printf("Error reloading configuration: %v\n", err)
 				continue
 			}
 
-			app.Spawn(manager, newManager, ctl.updates, ctl.stop)
+			newManager.Spawn(manager, ctl.updates, ctl.stop)
 			manager = newManager
 
 		case msg := <-ctl.updates:
@@ -76,7 +76,7 @@ func main() {
 		case input := <-ctl.input:
 			switch input {
 			case "exit":
-				app.Stop(manager, ctl.stop)
+				manager.StopAll(ctl.stop)
 				return
 			case "status":
 				manager.Mu.RLock()

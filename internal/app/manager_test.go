@@ -36,9 +36,9 @@ func TestManager_Load_PopulatesConfigAndProcess(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("NewManagerFromConfig() failed: %v", err)
 	}
 
 	// Assert: manager is not nil
@@ -125,9 +125,9 @@ func TestManager_Load_MultipleProgramsAndInstances(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("NewManagerFromConfig() failed: %v", err)
 	}
 
 	// Assert: Config map has 5 entries (2 servers + 3 workers)
@@ -220,9 +220,9 @@ func TestManager_Load_RespectAutostart(t *testing.T) {
 		t.Fatalf("failed to write test config: %v", err)
 	}
 
-	manager, err := Load(configPath)
+	manager, err := NewManagerFromConfig(configPath)
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("NewManagerFromConfig() failed: %v", err)
 	}
 
 	// Assert: auto:00 has Intended=true

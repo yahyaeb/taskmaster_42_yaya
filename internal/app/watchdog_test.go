@@ -85,8 +85,16 @@ func runWatchdog(t *testing.T, m *Manager, spec *config.ConfigSpec, updates chan
 	t.Helper()
 	stop := make(chan struct{})
 	done := make(chan struct{})
+	// Create or get ProcessInstance
+	m.Mu.Lock()
+	proc, ok := m.Process[spec.ProcessName]
+	if !ok {
+		proc = &ProcessInstance{Status: bus.STOPPED}
+		m.Process[spec.ProcessName] = proc
+	}
+	m.Mu.Unlock()
 	go func() {
-		m.Watchdog(spec, updates, stop)
+		m.Watchdog(spec, proc, updates, stop)
 		close(done)
 	}()
 	select {
@@ -134,65 +142,116 @@ func statusSequence(updates []bus.ProcessUpdate) []bus.Status {
 }
 
 // =============================================================================
+// Table-driven test helper
+// =============================================================================
+
+// watchdogTestCase defines a single watchdog test scenario.
+type watchdogTestCase struct {
+	name         string
+	spawnErr     error
+	waitCode     engine.ExitCode
+	waitDelay    time.Duration
+	autorestart  string
+	startretries int
+	starttime    int
+	procSetup    func(*ProcessInstance) // optional custom process setup
+	timeout      time.Duration
+	updatesCap   int
+	wantStatuses []bus.Status // expected statuses that must be present
+	check        func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate)
+}
+
+// runWatchdogTest executes a watchdog test case with standardized setup.
+func runWatchdogTest(t *testing.T, tc *watchdogTestCase) {
+	t.Helper()
+
+	mock := &mockProcessExecutor{
+		spawnErr:  tc.spawnErr,
+		waitCode:  tc.waitCode,
+		waitDelay: tc.waitDelay,
+	}
+	m := watchdogManager(mock)
+
+	spec := watchdogSpec("worker:00", tc.autorestart, tc.startretries, tc.starttime)
+	proc := &ProcessInstance{Status: bus.STOPPED}
+	if tc.procSetup != nil {
+		tc.procSetup(proc)
+	}
+	m.Process[spec.ProcessName] = proc
+
+	updates := make(chan bus.ProcessUpdate, tc.updatesCap)
+	timeout := tc.timeout
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+
+	runWatchdog(t, m, spec, updates, timeout)
+
+	all := drainUpdates(updates)
+
+	// Check expected statuses
+	for _, want := range tc.wantStatuses {
+		if !hasStatus(all, want) {
+			t.Errorf("expected status %s, got sequence: %v", want, statusSequence(all))
+		}
+	}
+
+	// Run custom check if provided
+	if tc.check != nil {
+		tc.check(t, tc, mock, proc, all)
+	}
+}
+
+// =============================================================================
 // State transition tests
 // =============================================================================
 
 // should_send_backoff_status_before_each_retry_when_spawn_fails
-func TestManager_Watchdog_StartupFailure_TransitionsToBackoff(t *testing.T) {
-	mock := &mockProcessExecutor{spawnErr: errors.New("spawn failed")}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "always", 2, 0) // 2 retries = 3 total attempts
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 20)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	all := drainUpdates(updates)
-	if !hasStatus(all, bus.BACKOFF) {
-		t.Errorf("expected BACKOFF during retries, got sequence: %v", statusSequence(all))
-	}
+func TestManagerWatchdogStartupFailureTransitionsToBackoff(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     errors.New("spawn failed"),
+		autorestart:  "always",
+		startretries: 2,
+		starttime:    0,
+		updatesCap:   20,
+		wantStatuses: []bus.Status{bus.BACKOFF},
+	})
 }
 
 // should_send_fatal_as_final_status_when_all_retries_exhausted_after_spawn_failure
-func TestManager_Watchdog_RetriesExhausted_TransitionsToFatal(t *testing.T) {
-	startretries := 2
-	mock := &mockProcessExecutor{spawnErr: errors.New("spawn failed")}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "always", startretries, 0)
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 20)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	all := drainUpdates(updates)
-
-	if len(all) == 0 {
-		t.Fatal("expected at least one update, got none")
-	}
-	if last := lastStatus(all); last != bus.FATAL {
-		t.Errorf("expected final status FATAL, got %s (full sequence: %v)", last, statusSequence(all))
-	}
+func TestManagerWatchdogRetriesExhaustedTransitionsToFatal(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     errors.New("spawn failed"),
+		autorestart:  "always",
+		startretries: 2,
+		starttime:    0,
+		updatesCap:   20,
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			if len(updates) == 0 {
+				t.Fatal("expected at least one update, got none")
+			}
+			if last := lastStatus(updates); last != bus.FATAL {
+				t.Errorf("expected final status FATAL, got %s (full sequence: %v)", last, statusSequence(updates))
+			}
+		},
+	})
 }
 
 // should_not_spawn_again_after_fatal_state_is_reached
-func TestManager_Watchdog_NoSpawnAfterFatal(t *testing.T) {
-	startretries := 1
-	mock := &mockProcessExecutor{spawnErr: errors.New("spawn failed")}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "always", startretries, 0)
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 10)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	// Spawn must not be called more than startretries+1 times
-	maxAllowed := startretries + 1
-	if mock.spawnCount > maxAllowed {
-		t.Errorf("spawn called %d times after FATAL — expected at most %d (startretries+1)", mock.spawnCount, maxAllowed)
-	}
+func TestManagerWatchdogNoSpawnAfterFatal(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     errors.New("spawn failed"),
+		autorestart:  "always",
+		startretries: 1,
+		starttime:    0,
+		updatesCap:   10,
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			maxAllowed := tc.startretries + 1
+			if mock.spawnCount > maxAllowed {
+				t.Errorf("spawn called %d times after FATAL — expected at most %d (startretries+1)", mock.spawnCount, maxAllowed)
+			}
+		},
+	})
 }
 
 // =============================================================================
@@ -200,73 +259,68 @@ func TestManager_Watchdog_NoSpawnAfterFatal(t *testing.T) {
 // =============================================================================
 
 // should_increment_retry_count_once_per_failed_spawn_attempt
-func TestManager_Watchdog_RetryCount_IncrementsOnEachAttempt(t *testing.T) {
-	startretries := 3
-	mock := &mockProcessExecutor{spawnErr: errors.New("spawn failed")}
-	m := watchdogManager(mock)
+func TestManagerWatchdogRetryCountIncrementsOnEachAttempt(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     errors.New("spawn failed"),
+		autorestart:  "always",
+		startretries: 3,
+		starttime:    0,
+		updatesCap:   20,
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			proc.Mu.RLock()
+			count := proc.RetryCount
+			proc.Mu.RUnlock()
 
-	spec := watchdogSpec("worker:00", "always", startretries, 0)
-	proc := &ProcessInstance{Status: bus.STOPPED}
-	m.Process[spec.ProcessName] = proc
-
-	updates := make(chan bus.ProcessUpdate, 20)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	proc.Mu.RLock()
-	count := proc.RetryCount
-	proc.Mu.RUnlock()
-
-	// startretries+1 attempts total (initial + retries)
-	expectedAttempts := startretries + 1
-	if count != expectedAttempts {
-		t.Errorf("expected RetryCount=%d after %d spawn attempts, got %d", expectedAttempts, expectedAttempts, count)
-	}
+			expectedAttempts := tc.startretries + 1
+			if count != expectedAttempts {
+				t.Errorf("expected RetryCount=%d after %d spawn attempts, got %d", expectedAttempts, expectedAttempts, count)
+			}
+		},
+	})
 }
 
 // should_increment_retry_count_when_process_exits_unexpectedly_and_is_retried
-func TestManager_Watchdog_RetryCount_IncrementsOnProcessCrash(t *testing.T) {
-	startretries := 2
-	// Spawn succeeds, process exits with non-zero code (triggers AlwaysRestart retry)
-	mock := &mockProcessExecutor{waitCode: 1}
-	m := watchdogManager(mock)
+func TestManagerWatchdogRetryCountIncrementsOnProcessCrash(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		waitCode:     1,
+		autorestart:  "always",
+		startretries: 2,
+		starttime:    0,
+		updatesCap:   20,
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			proc.Mu.RLock()
+			count := proc.RetryCount
+			proc.Mu.RUnlock()
 
-	spec := watchdogSpec("worker:00", "always", startretries, 0)
-	proc := &ProcessInstance{Status: bus.STOPPED}
-	m.Process[spec.ProcessName] = proc
-
-	updates := make(chan bus.ProcessUpdate, 20)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	proc.Mu.RLock()
-	count := proc.RetryCount
-	proc.Mu.RUnlock()
-
-	expectedAttempts := startretries + 1
-	if count != expectedAttempts {
-		t.Errorf("expected RetryCount=%d after %d crash+retry cycles, got %d", expectedAttempts, expectedAttempts, count)
-	}
+			expectedAttempts := tc.startretries + 1
+			if count != expectedAttempts {
+				t.Errorf("expected RetryCount=%d after %d crash+retry cycles, got %d", expectedAttempts, expectedAttempts, count)
+			}
+		},
+	})
 }
 
 // should_reset_retry_count_to_zero_when_process_starts_successfully
-func TestManager_Watchdog_RetryCount_ResetsOnSuccessfulStart(t *testing.T) {
-	// Spawn succeeds, process exits cleanly (exit 0, autorestart=never → no retry)
-	mock := &mockProcessExecutor{waitCode: 0}
-	m := watchdogManager(mock)
+func TestManagerWatchdogRetryCountResetsOnSuccessfulStart(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		waitCode:     0,
+		autorestart:  "never",
+		startretries: 0,
+		starttime:    0,
+		updatesCap:   10,
+		procSetup: func(p *ProcessInstance) {
+			p.RetryCount = 5 // pre-set to non-zero
+		},
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			proc.Mu.RLock()
+			count := proc.RetryCount
+			proc.Mu.RUnlock()
 
-	spec := watchdogSpec("worker:00", "never", 0, 0)
-	proc := &ProcessInstance{Status: bus.STOPPED, RetryCount: 5} // pre-set to non-zero
-	m.Process[spec.ProcessName] = proc
-
-	updates := make(chan bus.ProcessUpdate, 10)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	proc.Mu.RLock()
-	count := proc.RetryCount
-	proc.Mu.RUnlock()
-
-	if count != 0 {
-		t.Errorf("expected RetryCount reset to 0 after successful start, got %d", count)
-	}
+			if count != 0 {
+				t.Errorf("expected RetryCount reset to 0 after successful start, got %d", count)
+			}
+		},
+	})
 }
 
 // =============================================================================
@@ -274,60 +328,52 @@ func TestManager_Watchdog_RetryCount_ResetsOnSuccessfulStart(t *testing.T) {
 // =============================================================================
 
 // should_set_last_start_timestamp_when_process_spawns_successfully
-func TestManager_Watchdog_LastStart_SetOnSuccessfulSpawn(t *testing.T) {
-	// Process spawns, runs briefly, exits
-	mock := &mockProcessExecutor{
-		waitCode:  1,              // exits with failure so no infinite retry
-		waitDelay: 10 * time.Millisecond,
-	}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "never", 0, 0)
-	proc := &ProcessInstance{Status: bus.STOPPED}
-	m.Process[spec.ProcessName] = proc
-
-	updates := make(chan bus.ProcessUpdate, 10)
-
+func TestManagerWatchdogLastStartSetOnSuccessfulSpawn(t *testing.T) {
 	before := time.Now()
-	runWatchdog(t, m, spec, updates, 5*time.Second)
+	runWatchdogTest(t, &watchdogTestCase{
+		waitCode:     1, // exits with failure so no infinite retry
+		waitDelay:    10 * time.Millisecond,
+		autorestart:  "never",
+		startretries: 0,
+		starttime:    0,
+		updatesCap:   10,
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			proc.Mu.RLock()
+			lastStart := proc.LastStart
+			proc.Mu.RUnlock()
 
-	proc.Mu.RLock()
-	lastStart := proc.LastStart
-	proc.Mu.RUnlock()
-
-	if lastStart.IsZero() {
-		t.Error("expected LastStart to be set after successful spawn, got zero value")
-	}
-	if lastStart.Before(before) {
-		t.Errorf("LastStart (%v) should be after test began (%v)", lastStart, before)
-	}
+			if lastStart.IsZero() {
+				t.Error("expected LastStart to be set after successful spawn, got zero value")
+			}
+			if lastStart.Before(before) {
+				t.Errorf("LastStart (%v) should be after test began (%v)", lastStart, before)
+			}
+		},
+	})
 }
 
 // should_update_last_start_on_each_retry_when_process_keeps_crashing
-func TestManager_Watchdog_LastStart_UpdatedOnRetry(t *testing.T) {
-	// Process spawns, exits immediately each time, retried 2 times
-	mock := &mockProcessExecutor{waitCode: 1}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "always", 2, 0)
-	proc := &ProcessInstance{Status: bus.STOPPED}
-	m.Process[spec.ProcessName] = proc
-
-	updates := make(chan bus.ProcessUpdate, 20)
-
+func TestManagerWatchdogLastStartUpdatedOnRetry(t *testing.T) {
 	before := time.Now()
-	runWatchdog(t, m, spec, updates, 5*time.Second)
+	runWatchdogTest(t, &watchdogTestCase{
+		waitCode:     1,
+		autorestart:  "always",
+		startretries: 2,
+		starttime:    0,
+		updatesCap:   20,
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			proc.Mu.RLock()
+			lastStart := proc.LastStart
+			proc.Mu.RUnlock()
 
-	proc.Mu.RLock()
-	lastStart := proc.LastStart
-	proc.Mu.RUnlock()
-
-	if lastStart.IsZero() {
-		t.Error("expected LastStart to be set after retry cycles, got zero value")
-	}
-	if lastStart.Before(before) {
-		t.Errorf("LastStart (%v) should be after test began (%v)", lastStart, before)
-	}
+			if lastStart.IsZero() {
+				t.Error("expected LastStart to be set after retry cycles, got zero value")
+			}
+			if lastStart.Before(before) {
+				t.Errorf("LastStart (%v) should be after test began (%v)", lastStart, before)
+			}
+		},
+	})
 }
 
 // =============================================================================
@@ -335,45 +381,31 @@ func TestManager_Watchdog_LastStart_UpdatedOnRetry(t *testing.T) {
 // =============================================================================
 
 // should_treat_process_as_backoff_when_it_exits_before_starttime_window_elapses
-func TestManager_Watchdog_StarttimeWindow_ProcessExitsTooSoon(t *testing.T) {
-	// Process exits immediately — well before the 5-second starttime window
-	mock := &mockProcessExecutor{waitCode: 0, waitDelay: 0}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "always", 2, 5) // starttime=5s
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 20)
-	runWatchdog(t, m, spec, updates, 10*time.Second)
-
-	all := drainUpdates(updates)
-	// Process exiting before starttime = failed startup attempt = BACKOFF, not RUNNING success
-	if !hasStatus(all, bus.BACKOFF) {
-		t.Errorf("expected BACKOFF when process exits before starttime window, got: %v", statusSequence(all))
-	}
+func TestManagerWatchdogStarttimeWindowProcessExitsTooSoon(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		waitCode:     0,
+		waitDelay:    0, // exits immediately — well before the 5-second starttime window
+		autorestart:  "always",
+		startretries: 2,
+		starttime:    5, // starttime=5s
+		updatesCap:   20,
+		timeout:      10 * time.Second,
+		wantStatuses: []bus.Status{bus.BACKOFF}, // Process exiting before starttime = failed startup attempt
+	})
 }
 
 // should_treat_process_as_running_when_it_survives_past_starttime_window
-func TestManager_Watchdog_StarttimeWindow_ProcessSurvivesWindow(t *testing.T) {
+func TestManagerWatchdogStarttimeWindowProcessSurvivesWindow(t *testing.T) {
 	starttime := 50 * time.Millisecond
-	// Process stays alive longer than starttime window
-	mock := &mockProcessExecutor{waitCode: 0, waitDelay: starttime * 3}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "never", 0, 0)
-	spec.Starttime = int(starttime.Milliseconds()) // test-friendly value in ms is NOT the spec field unit
-	// Note: ConfigSpec.Starttime is in seconds. This test documents the expected boundary.
-	// Adjust spec.Starttime to 0 and use a process that naturally runs past the window.
-	spec.Starttime = 0 // no window guard → process exits cleanly
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 10)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	all := drainUpdates(updates)
-	if !hasStatus(all, bus.RUNNING) {
-		t.Errorf("expected RUNNING status when process spawns, got: %v", statusSequence(all))
-	}
+	runWatchdogTest(t, &watchdogTestCase{
+		waitCode:     0,
+		waitDelay:    starttime * 3, // Process stays alive longer than starttime window
+		autorestart:  "never",
+		startretries: 0,
+		starttime:    0, // no window guard → process exits cleanly
+		updatesCap:   10,
+		wantStatuses: []bus.Status{bus.RUNNING},
+	})
 }
 
 // =============================================================================
@@ -381,57 +413,42 @@ func TestManager_Watchdog_StarttimeWindow_ProcessSurvivesWindow(t *testing.T) {
 // =============================================================================
 
 // should_handle_binary_not_found_error_and_send_fatal_without_crashing
-func TestManager_Watchdog_BinaryMissing_ErrorHandling(t *testing.T) {
+func TestManagerWatchdogBinaryMissingErrorHandling(t *testing.T) {
 	binaryNotFound := fmt.Errorf("spawn failed: %w", exec.ErrNotFound)
-	mock := &mockProcessExecutor{spawnErr: binaryNotFound}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "never", 0, 0)
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 10)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	all := drainUpdates(updates)
-	if !hasStatus(all, bus.FATAL) {
-		t.Errorf("expected FATAL for missing binary, got: %v", statusSequence(all))
-	}
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     binaryNotFound,
+		autorestart:  "never",
+		startretries: 0,
+		starttime:    0,
+		updatesCap:   10,
+		wantStatuses: []bus.Status{bus.FATAL},
+	})
 }
 
 // should_handle_permission_denied_error_and_send_fatal_without_crashing
-func TestManager_Watchdog_PermissionDenied_ErrorHandling(t *testing.T) {
+func TestManagerWatchdogPermissionDeniedErrorHandling(t *testing.T) {
 	permDenied := fmt.Errorf("spawn failed: fork/exec /bin/test: %w", syscall.EACCES)
-	mock := &mockProcessExecutor{spawnErr: permDenied}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "never", 0, 0)
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 10)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	all := drainUpdates(updates)
-	if !hasStatus(all, bus.FATAL) {
-		t.Errorf("expected FATAL for permission denied, got: %v", statusSequence(all))
-	}
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     permDenied,
+		autorestart:  "never",
+		startretries: 0,
+		starttime:    0,
+		updatesCap:   10,
+		wantStatuses: []bus.Status{bus.FATAL},
+	})
 }
 
 // should_handle_bad_working_directory_error_and_send_fatal_without_crashing
-func TestManager_Watchdog_BadDirectory_ErrorHandling(t *testing.T) {
+func TestManagerWatchdogBadDirectoryErrorHandling(t *testing.T) {
 	badDir := fmt.Errorf("spawn failed: chdir /nonexistent: %w", syscall.ENOENT)
-	mock := &mockProcessExecutor{spawnErr: badDir}
-	m := watchdogManager(mock)
-
-	spec := watchdogSpec("worker:00", "never", 0, 0)
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 10)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	all := drainUpdates(updates)
-	if !hasStatus(all, bus.FATAL) {
-		t.Errorf("expected FATAL for bad working directory, got: %v", statusSequence(all))
-	}
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     badDir,
+		autorestart:  "never",
+		startretries: 0,
+		starttime:    0,
+		updatesCap:   10,
+		wantStatuses: []bus.Status{bus.FATAL},
+	})
 }
 
 // =============================================================================
@@ -439,12 +456,13 @@ func TestManager_Watchdog_BadDirectory_ErrorHandling(t *testing.T) {
 // =============================================================================
 
 // should_complete_watchdog_without_panicking_when_spawn_fails
-func TestManager_ResilientToCrashingProcess(t *testing.T) {
+func TestManagerResilientToCrashingProcess(t *testing.T) {
 	mock := &mockProcessExecutor{spawnErr: errors.New("spawn failed")}
 	m := watchdogManager(mock)
 
 	spec := watchdogSpec("worker:00", "never", 0, 0)
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
+	proc := &ProcessInstance{Status: bus.STOPPED}
+	m.Process[spec.ProcessName] = proc
 
 	updates := make(chan bus.ProcessUpdate, 10)
 
@@ -458,7 +476,7 @@ func TestManager_ResilientToCrashingProcess(t *testing.T) {
 			close(done)
 		}()
 		stop := make(chan struct{})
-		m.Watchdog(spec, updates, stop)
+		m.Watchdog(spec, proc, updates, stop)
 	}()
 
 	select {
@@ -473,27 +491,30 @@ func TestManager_ResilientToCrashingProcess(t *testing.T) {
 }
 
 // should_keep_process_entry_in_manager_after_watchdog_ends_with_error
-func TestManager_ProcessEntry_SurvivesWatchdogFailure(t *testing.T) {
-	mock := &mockProcessExecutor{spawnErr: errors.New("spawn failed")}
-	m := watchdogManager(mock)
+func TestManagerProcessEntrySurvivesWatchdogFailure(t *testing.T) {
+	runWatchdogTest(t, &watchdogTestCase{
+		spawnErr:     errors.New("spawn failed"),
+		autorestart:  "never",
+		startretries: 0,
+		starttime:    0,
+		updatesCap:   10,
+		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
+			m := watchdogManager(mock)
+			// Re-add the process to check it survives (mockManager creates fresh manager)
+			m.Process["worker:00"] = proc
+			m.Mu.RLock()
+			_, exists := m.Process["worker:00"]
+			m.Mu.RUnlock()
 
-	spec := watchdogSpec("worker:00", "never", 0, 0)
-	m.Process[spec.ProcessName] = &ProcessInstance{Status: bus.STOPPED}
-
-	updates := make(chan bus.ProcessUpdate, 10)
-	runWatchdog(t, m, spec, updates, 5*time.Second)
-
-	m.Mu.RLock()
-	_, exists := m.Process[spec.ProcessName]
-	m.Mu.RUnlock()
-
-	if !exists {
-		t.Error("ProcessInstance was removed from Manager after watchdog failure — it must remain for status queries")
-	}
+			if !exists {
+				t.Error("ProcessInstance was removed from Manager after watchdog failure — it must remain for status queries")
+			}
+		},
+	})
 }
 
 // should_leave_manager_functional_for_other_processes_after_one_watchdog_fails
-func TestManager_OtherProcesses_UnaffectedByWatchdogFailure(t *testing.T) {
+func TestManagerOtherProcessesUnaffectedByWatchdogFailure(t *testing.T) {
 	mock := &mockProcessExecutor{spawnErr: errors.New("spawn failed")}
 	m := watchdogManager(mock)
 

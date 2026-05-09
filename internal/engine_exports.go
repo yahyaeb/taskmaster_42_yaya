@@ -7,7 +7,6 @@ import (
 // Re-export engine types for backward compatibility with existing tests.
 type (
 	ProcessExecutor             = engine.ProcessExecutor
-	ConfigurableProcessExecutor = engine.ConfigurableProcessExecutor
 	Process                     = engine.Process
 	ExitCode                    = engine.ExitCode
 	RetryStrategy               = engine.RetryStrategy

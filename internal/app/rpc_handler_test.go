@@ -92,12 +92,15 @@ func (f *fakeManager) Restart(name string) error {
 	return nil
 }
 
-func (f *fakeManager) Reload() error {
+func (f *fakeManager) Reload() (*ReloadResult, error) {
 	if f.panicOnMethod == "Reload" {
 		panic("simulated panic in Reload")
 	}
 	f.reloadCalled = true
-	return f.errOnReload
+	if f.errOnReload != nil {
+		return nil, f.errOnReload
+	}
+	return &ReloadResult{Added: []string{}, Removed: []string{}, Restarted: []string{}}, nil
 }
 
 func (f *fakeManager) Shutdown() error {
