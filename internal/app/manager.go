@@ -63,6 +63,12 @@ func (pi *ProcessInstance) SetStateOnBackoff(attempt int) {
 	pi.RetryCount = attempt
 }
 
+func (pi *ProcessInstance) SetRetryCount(attempt int) {
+	pi.Mu.Lock()
+	defer pi.Mu.Unlock()
+	pi.RetryCount = attempt
+}
+
 func (pi *ProcessInstance) State() (int, bus.Status) {
 	pi.Mu.RLock()
 	defer pi.Mu.RUnlock()
@@ -143,6 +149,10 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 		proc.SetStateOnBackoff(attempt)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.BACKOFF, Pid: currentPID}
 		fmt.Printf("Program %s is backoff after %d attempts\n", setting.Program, attempt)
+	}
+
+	watcher.OnSpawnFailed = func(attempt int) {
+		proc.SetRetryCount(attempt)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

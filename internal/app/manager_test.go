@@ -14,21 +14,22 @@ func TestManager_Load_PopulatesConfigAndProcess(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yml")
 
-	yaml := `server:
-  program: /bin/server
-  cmd: "go run main.go"
-  numprocs: 1
-  autostart: true
-  autorestart: always
-  exitcodes:
-    - 0
-    - 2
-  startretries: 3
-  starttime: 5
-  stopsignal: TERM
-  stoptime: 10
-  stdout: /tmp/server.stdout
-  stderr: /tmp/server.stderr
+	yaml := `programs:
+  server:
+    program: /bin/server
+    cmd: "go run main.go"
+    numprocs: 1
+    autostart: true
+    autorestart: always
+    exitcodes:
+      - 0
+      - 2
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 10
+    stdout: /tmp/server.stdout
+    stderr: /tmp/server.stderr
 `
 	err := os.WriteFile(configPath, []byte(yaml), 0644)
 	if err != nil {
@@ -100,23 +101,24 @@ func TestManager_Load_MultipleProgramsAndInstances(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yml")
 
-	yaml := `server:
-  program: /bin/server
-  cmd: "server"
-  numprocs: 2
-  autostart: true
-  autorestart: always
-  stopsignal: TERM
-  stoptime: 10
+	yaml := `programs:
+  server:
+    program: /bin/server
+    cmd: "server"
+    numprocs: 2
+    autostart: true
+    autorestart: always
+    stopsignal: TERM
+    stoptime: 10
 
-worker:
-  program: /usr/bin/worker
-  cmd: "worker"
-  numprocs: 3
-  autostart: false
-  autorestart: never
-  stopsignal: INT
-  stoptime: 5
+  worker:
+    program: /usr/bin/worker
+    cmd: "worker"
+    numprocs: 3
+    autostart: false
+    autorestart: never
+    stopsignal: INT
+    stoptime: 5
 `
 	err := os.WriteFile(configPath, []byte(yaml), 0644)
 	if err != nil {
@@ -200,17 +202,18 @@ func TestManager_Load_RespectAutostart(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yml")
 
-	yaml := `auto:
-  program: /bin/auto
-  cmd: "auto"
-  numprocs: 1
-  autostart: true
+	yaml := `programs:
+  auto:
+    program: /bin/auto
+    cmd: "auto"
+    numprocs: 1
+    autostart: true
 
-manual:
-  program: /bin/manual
-  cmd: "manual"
-  numprocs: 1
-  autostart: false
+  manual:
+    program: /bin/manual
+    cmd: "manual"
+    numprocs: 1
+    autostart: false
 `
 	err := os.WriteFile(configPath, []byte(yaml), 0644)
 	if err != nil {

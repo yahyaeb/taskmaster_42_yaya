@@ -20,7 +20,8 @@ type ProcessWatcher struct {
 	Config           RetryConfig
 	Strategy         RetryStrategy // optional, if nil uses config.ExpectedCodes
 	OnProcessStarted func(pid int) // optional callback when a process starts
-	OnBackoff func(attempt int) 
+	OnBackoff        func(attempt int)
+	OnSpawnFailed    func(attempt int)
 }
 
 // NewProcessWatcher creates a new ProcessWatcher with the given executor and retry config.
@@ -59,9 +60,7 @@ func (pw *ProcessWatcher) run(ctx context.Context, spawner ProcessSpawner) (Exit
 
 	for attempt := 0; attempt <= pw.Config.MaxRetries; attempt++ {
 		if attempt > 0 {
-			if pw.OnBackoff != nil {
-				pw.OnBackoff(attempt)
-			}
+			pw.doBackoff(attempt)
 			select {
 			case <-time.After(pw.Config.RetryDelay):
 			case <-ctx.Done():
@@ -69,43 +68,16 @@ func (pw *ProcessWatcher) run(ctx context.Context, spawner ProcessSpawner) (Exit
 			}
 		}
 
-		process, err := spawner(ctx)
-		if err != nil {
-			lastErr = fmt.Errorf("spawn failed: %w", err)
+		exitCode, ok, err := pw.trySpawnAndWait(ctx, spawner, attempt)
+		if !ok {
+			lastExit = exitCode
+			if err != nil {
+				lastErr = err
+			}
+			pw.notifySpawnFailed(attempt + 1)
 			continue
 		}
-		if pw.OnProcessStarted != nil {
-			pw.OnProcessStarted(process.PID)
-		}
-
-		exitCode, err := pw.Executor.Wait(ctx, process.PID)
-		lastExit = exitCode
-		lastErr = err
-
-		if err != nil {
-			lastErr = fmt.Errorf("wait failed: %w", err)
-			continue
-		}
-
-		// Use RetryStrategy if available, otherwise fall back to ExpectedCodes
-		if pw.Strategy != nil {
-			if !pw.Strategy.ShouldRestart(int(exitCode), attempt) {
-				return exitCode, nil
-			}
-		} else {
-			// Legacy logic using ExpectedCodes
-			if pw.Config.ExpectedCodes != nil && pw.Config.ExpectedCodes[int(exitCode)] {
-				return exitCode, nil
-			}
-			if pw.Config.ExpectedCodes == nil && exitCode == 0 {
-				return exitCode, nil
-			}
-		}
-
-		// Retry on failure
-		if attempt < pw.Config.MaxRetries {
-			continue
-		}
+		return exitCode, nil
 	}
 
 	if lastErr != nil {
@@ -113,6 +85,59 @@ func (pw *ProcessWatcher) run(ctx context.Context, spawner ProcessSpawner) (Exit
 	}
 
 	return lastExit, fmt.Errorf("process exited with code %d after %d retries", lastExit, pw.Config.MaxRetries)
+}
+
+// trySpawnAndWait attempts to spawn and wait for a process.
+// Returns (exitCode, success bool, error). Success is true if the process
+// completed without needing a retry (either success or terminal failure).
+func (pw *ProcessWatcher) trySpawnAndWait(ctx context.Context, spawner ProcessSpawner, attempt int) (ExitCode, bool, error) {
+	process, err := spawner(ctx)
+	if err != nil {
+		return 0, false, fmt.Errorf("spawn failed: %w", err)
+	}
+
+	if pw.OnProcessStarted != nil {
+		pw.OnProcessStarted(process.PID)
+	}
+
+	exitCode, err := pw.Executor.Wait(ctx, process.PID)
+	if err != nil {
+		return exitCode, false, fmt.Errorf("wait failed: %w", err)
+	}
+
+	// Check if we should restart based on exit code
+	shouldRestart := pw.shouldRestart(exitCode, attempt)
+	if shouldRestart {
+		return exitCode, false, nil
+	}
+
+	return exitCode, true, nil
+}
+
+// shouldRestart determines if the process should be restarted based on exit code
+func (pw *ProcessWatcher) shouldRestart(exitCode ExitCode, attempt int) bool {
+	if pw.Strategy != nil {
+		return pw.Strategy.ShouldRestart(int(exitCode), attempt)
+	}
+	// Legacy logic using ExpectedCodes
+	if pw.Config.ExpectedCodes != nil {
+		return !pw.Config.ExpectedCodes[int(exitCode)]
+	}
+	return exitCode != 0
+}
+
+// doBackoff triggers the backoff callback if configured
+func (pw *ProcessWatcher) doBackoff(attempt int) {
+	if pw.OnBackoff != nil {
+		pw.OnBackoff(attempt)
+	}
+}
+
+// notifySpawnFailed triggers the spawn failed callback if configured
+func (pw *ProcessWatcher) notifySpawnFailed(attempt int) {
+	if pw.OnSpawnFailed != nil {
+		pw.OnSpawnFailed(attempt)
+	}
 }
 
 
