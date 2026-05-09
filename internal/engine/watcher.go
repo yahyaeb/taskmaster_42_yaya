@@ -3,6 +3,9 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"sync"
 	"taskmaster/internal/config"
 	"time"
 )
@@ -20,8 +23,11 @@ type ProcessWatcher struct {
 	Config           RetryConfig
 	Strategy         RetryStrategy // optional, if nil uses config.ExpectedCodes
 	OnProcessStarted func(pid int) // optional callback when a process starts
+	OnProcessRunning func(pid int) // optional callback when process completes starttime
 	OnBackoff        func(attempt int)
 	OnSpawnFailed    func(attempt int)
+	OnStarting       func() // optional callback before respawn (for retry flow)
+	StarttimeSec     int    // seconds process must stay alive to be considered started
 }
 
 // NewProcessWatcher creates a new ProcessWatcher with the given executor and retry config.
@@ -45,6 +51,8 @@ func NewProcessWatcherWithStrategy(executor ProcessExecutor, strategy RetryStrat
 		},
 		Strategy:         strategy,
 		OnProcessStarted: nil,
+		OnProcessRunning: nil,
+		OnStarting:       nil,
 	}
 }
 
@@ -66,6 +74,11 @@ func (pw *ProcessWatcher) run(ctx context.Context, spawner ProcessSpawner) (Exit
 			case <-ctx.Done():
 				return lastExit, ctx.Err()
 			}
+		}
+
+		// Notify that we're about to start (for retry flow: RUNNING -> BACKOFF -> STARTING -> RUNNING)
+		if attempt > 0 && pw.OnStarting != nil {
+			pw.OnStarting()
 		}
 
 		exitCode, ok, err := pw.trySpawnAndWait(ctx, spawner, attempt)
@@ -100,6 +113,64 @@ func (pw *ProcessWatcher) trySpawnAndWait(ctx context.Context, spawner ProcessSp
 		pw.OnProcessStarted(process.PID)
 	}
 
+	// Wait for starttime: process must stay alive for this duration to be considered "started"
+	starttime := time.Duration(pw.StarttimeSec) * time.Second
+	if starttime > 0 {
+		// Wait for process to complete startup or die early
+		timer := time.NewTimer(starttime)
+		earlyExit := make(chan struct{})
+		var earlyExitOnce sync.Once
+		signalEarlyExit := func() {
+			earlyExitOnce.Do(func() {
+				close(earlyExit)
+			})
+		}
+		done := make(chan struct{})
+
+		// Poll to check if process is still alive during starttime window
+		// Uses /proc/<pid>/stat to detect zombies without reaping the child.
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					state, err := procState(process.PID)
+					if err != nil || state == 'Z' {
+						signalEarlyExit()
+						return
+					}
+				case <-done:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
+		select {
+		case <-earlyExit:
+			timer.Stop()
+			close(done)
+			// Process died during starttime - consider it a failed start
+			exitCode, _ := pw.Executor.Wait(ctx, process.PID)
+			return exitCode, false, nil
+		case <-timer.C:
+			close(done)
+			// Process survived starttime - it's now "running"
+			if pw.OnProcessRunning != nil {
+				pw.OnProcessRunning(process.PID)
+			}
+		case <-ctx.Done():
+			timer.Stop()
+			close(done)
+			return 0, false, ctx.Err()
+		}
+	} else if pw.OnProcessRunning != nil {
+		// No starttime required, mark as running immediately
+		pw.OnProcessRunning(process.PID)
+	}
+
 	exitCode, err := pw.Executor.Wait(ctx, process.PID)
 	if err != nil {
 		return exitCode, false, fmt.Errorf("wait failed: %w", err)
@@ -112,6 +183,20 @@ func (pw *ProcessWatcher) trySpawnAndWait(ctx context.Context, spawner ProcessSp
 	}
 
 	return exitCode, true, nil
+}
+
+func procState(pid int) (byte, error) {
+	statPath := fmt.Sprintf("/proc/%d/stat", pid)
+	data, err := os.ReadFile(statPath)
+	if err != nil {
+		return 0, err
+	}
+	contents := string(data)
+	idx := strings.LastIndex(contents, ") ")
+	if idx == -1 || idx+2 >= len(contents) {
+		return 0, fmt.Errorf("parse /proc stat for pid %d", pid)
+	}
+	return contents[idx+2], nil
 }
 
 // shouldRestart determines if the process should be restarted based on exit code

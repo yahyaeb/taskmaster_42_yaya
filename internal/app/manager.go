@@ -94,9 +94,15 @@ func (pi *ProcessInstance) SetStateOnStart(pid int) {
 	pi.Mu.Lock()
 	defer pi.Mu.Unlock()
 	pi.Pid = pid
-	pi.Status = bus.RUNNING
+	pi.Status = bus.STARTING
 	pi.LastStart = time.Now()
 	pi.RetryCount = 0 // Reset retry count on successful start
+}
+
+func (pi *ProcessInstance) SetStateOnRunning() {
+	pi.Mu.Lock()
+	defer pi.Mu.Unlock()
+	pi.Status = bus.RUNNING
 }
 
 func (pi *ProcessInstance) SetStateOnBackoff(attempt int) {
@@ -190,6 +196,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance, up
 	retryDelay := time.Duration(0)
 
 	watcher := engine.NewProcessWatcherWithStrategy(m.executor, strategy, setting.Startretries, retryDelay)
+	watcher.StarttimeSec = setting.Starttime
 
 	var (
 		currentPID int
@@ -208,7 +215,12 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance, up
 		pidMu.Unlock()
 
 		proc.SetStateOnStart(pid)
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STARTING, Pid: pid}
+		slog.Info("program starting", "program", setting.Program, "pid", pid)
+	}
 
+	watcher.OnProcessRunning = func(pid int) {
+		proc.SetStateOnRunning()
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.RUNNING, Pid: pid}
 		slog.Info("started program", "program", setting.Program, "pid", pid)
 	}
@@ -224,6 +236,12 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance, up
 
 	watcher.OnSpawnFailed = func(attempt int) {
 		proc.SetRetryCount(attempt)
+	}
+
+	watcher.OnStarting = func() {
+		proc.SetStatus(bus.STARTING)
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STARTING}
+		slog.Info("program starting (retry)", "program", setting.Program)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

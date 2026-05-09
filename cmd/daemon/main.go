@@ -42,10 +42,8 @@ func main() {
 
 	go read(ctl.input)
 
-	m := app.NewManager()
-
 	socketPath := "/tmp/taskmaster.sock"
-	_, err = app.StartSocketListener(socketPath, m)
+	_, err = app.StartSocketListener(socketPath, manager)
 	if err != nil {
 		fmt.Printf("Error starting socket server: %v\n", err)
 		return

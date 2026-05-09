@@ -11,6 +11,10 @@ import (
 	"taskmaster/internal/config"
 )
 
+// umaskLock prevents races when changing process umask during fork.
+// syscall.ForkLock is used by os/exec to serialize fork/exec operations.
+var umaskLock = &syscall.ForkLock
+
 // OsProcessExecutor implements ConfigurableProcessExecutor using os/exec.
 // It manages file handles for stdout/stderr redirection and ensures they are closed.
 type OsProcessExecutor struct {
@@ -45,7 +49,15 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 		cmd = newCmd
 	}
 
+	// Apply umask before cmd.Start (always apply, even if 0)
+	umaskLock.Lock()
+	oldMask := syscall.Umask(spec.Umask)
+
 	err = cmd.Start()
+
+	// Restore umask immediately after fork/exec
+	syscall.Umask(oldMask)
+	umaskLock.Unlock()
 	if err != nil {
 		// Close any opened files on error
 		e.closeFiles(cmd)
