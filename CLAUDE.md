@@ -1,3 +1,5 @@
+Always edit the project structure after each file edit / write.
+
 Root:
   ├── main.go
   │   └── (no top-level defs)
@@ -74,6 +76,17 @@ Root:
   │   │   │   └── type Updates
   │   │   └── *_test.go
   │   └── app/
+  │       ├── handler.go
+  │       │   ├── func HandleConnection
+  │       │   ├── func RouteRequest
+  │       │   ├── func withRecovery
+  │       │   ├── func getNameFromParams
+  │       │   ├── func handleGetStatus
+  │       │   ├── func handleStart
+  │       │   ├── func handleStop
+  │       │   ├── func handleRestart
+  │       │   ├── func handleReload
+  │       │   └── func handleShutdown
   │       ├── manager.go
   │       │   ├── type ProcessInstance
   │       │   ├── func (pi *ProcessInstance) GetStatus

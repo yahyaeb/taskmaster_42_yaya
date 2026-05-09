@@ -13,10 +13,11 @@ func TestDeamonCommunication(t *testing.T) {
 	defer os.Remove(socketPath)
 
 	m := NewManager()
-	err := StartSocketListener(socketPath, m)
+	listener, err := StartSocketListener(socketPath, m)
 	if err != nil {
 		t.Fatalf("Failed to start listener: %v", err)
 	}
+	defer listener.Stop()
 
 	conn, err := net.Dial("unix", socketPath)
 
@@ -28,15 +29,22 @@ func TestDeamonCommunication(t *testing.T) {
 
 	req := protocol.RPCRequest{
 		Jsonrpc: "2.0",
-		Method:  "Taskmaster.status",
+		Method:  "Taskmaster.GetStatus",
+		Params:  map[string]interface{}{"name": "all"},
 		ID:      1,
 	}
 
-	json.NewEncoder(conn).Encode(req)
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		t.Fatalf("Failed to encode request: %v", err)
+	}
 
 	var res protocol.RPCResponse
 	if err := json.NewDecoder(conn).Decode(&res); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if res.Error != nil {
+		t.Errorf("Expected success, got error: code=%d msg=%s", res.Error.Code, res.Error.Message)
 	}
 
 	if res.ID != 1 {

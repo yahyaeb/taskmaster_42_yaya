@@ -6,12 +6,26 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
 	"taskmaster/internal/engine"
+	"taskmaster/internal/protocol"
 )
+
+// ManagerInterface defines the boundary for RPC handlers.
+// Handlers use this interface; production uses *Manager which implements it.
+type ManagerInterface interface {
+	GetProcessInfo(name string) (protocol.ProcessInfo, error)
+	GetAllProcessInfo() ([]protocol.ProcessInfo, error)
+	Start(name string) error
+	Stop(name string) error
+	Restart(name string) error
+	Reload() error
+	Shutdown() error
+}
 
 type ProcessInstance struct {
 	Pid        int
@@ -147,7 +161,10 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, updates chan bus.ProcessU
 
 	watcher.OnBackoff = func(attempt int) {
 		proc.SetStateOnBackoff(attempt)
-		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.BACKOFF, Pid: currentPID}
+		pidMu.RLock()
+		pid := currentPID
+		pidMu.RUnlock()
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.BACKOFF, Pid: pid}
 		fmt.Printf("Program %s is backoff after %d attempts\n", setting.Program, attempt)
 	}
 
@@ -344,4 +361,164 @@ func Load(path string) (*Manager, error) {
 func closeChannel(ch chan struct{}) {
 	defer func() { recover() }()
 	close(ch)
+}
+
+// ============================================================================
+// ManagerInterface Implementation
+// ============================================================================
+
+// GetProcessInfo returns info for a single process by name.
+func (m *Manager) GetProcessInfo(name string) (protocol.ProcessInfo, error) {
+	m.Mu.RLock()
+	proc, exists := m.Process[name]
+	m.Mu.RUnlock()
+
+	if !exists {
+		return protocol.ProcessInfo{}, fmt.Errorf("process not found: %s", name)
+	}
+
+	// Read process state under its own lock
+	proc.Mu.RLock()
+	info := protocol.ProcessInfo{
+		Name:    name,
+		Status:  string(proc.Status),
+		Pid:     proc.Pid,
+		Uptime:  formatUptime(proc.LastStart),
+		Retries: proc.RetryCount,
+	}
+	proc.Mu.RUnlock()
+
+	return info, nil
+}
+
+// GetAllProcessInfo returns info for all managed processes.
+func (m *Manager) GetAllProcessInfo() ([]protocol.ProcessInfo, error) {
+	m.Mu.RLock()
+	processes := make(map[string]*ProcessInstance, len(m.Process))
+	for name, proc := range m.Process {
+		processes[name] = proc
+	}
+	m.Mu.RUnlock()
+
+	result := make([]protocol.ProcessInfo, 0, len(processes))
+	for name, proc := range processes {
+		// Read each process state under its own lock
+		proc.Mu.RLock()
+		info := protocol.ProcessInfo{
+			Name:    name,
+			Status:  string(proc.Status),
+			Pid:     proc.Pid,
+			Uptime:  formatUptime(proc.LastStart),
+			Retries: proc.RetryCount,
+		}
+		proc.Mu.RUnlock()
+		result = append(result, info)
+	}
+	return result, nil
+}
+
+// formatUptime returns a human-readable uptime string.
+func formatUptime(startTime time.Time) string {
+	duration := time.Since(startTime)
+	if startTime.IsZero() {
+		return "0s"
+	}
+	hours := int(duration.Hours())
+	minutes := int(duration.Minutes()) % 60
+	seconds := int(duration.Seconds()) % 60
+
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
+}
+
+// Start starts a single process by name.
+// Returns error if process not found or start operation fails.
+func (m *Manager) Start(name string) error {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+
+	proc, exists := m.Process[name]
+	if !exists {
+		return fmt.Errorf("process not found: %s", name)
+	}
+
+	// Check if already running
+	if proc.GetStatus() == bus.RUNNING {
+		return nil // Idempotent: already running is not an error
+	}
+
+	// TODO: Trigger actual process start via watchdog
+	// For now, update status to indicate intent
+	proc.SetStatus(bus.STARTING)
+	return nil
+}
+
+// Stop stops a single process by name.
+// Returns error if process not found or stop operation fails.
+func (m *Manager) Stop(name string) error {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+
+	proc, exists := m.Process[name]
+	if !exists {
+		return fmt.Errorf("process not found: %s", name)
+	}
+
+	// Check if already stopped
+	if proc.GetStatus() == bus.STOPPED {
+		return nil // Idempotent: already stopped is not an error
+	}
+
+	pid := proc.GetPid()
+	if pid > 0 {
+		p, err := os.FindProcess(pid)
+		if err == nil {
+			// Try graceful termination first
+			p.Signal(syscall.SIGTERM)
+		}
+	}
+
+	proc.SetStatus(bus.STOPPED)
+	return nil
+}
+
+// Restart restarts a single process by name.
+// Returns error if process not found or restart operation fails.
+func (m *Manager) Restart(name string) error {
+	// Stop then start
+	if err := m.Stop(name); err != nil {
+		return err
+	}
+	return m.Start(name)
+}
+
+// Reload reloads the configuration.
+// Currently returns not implemented - full implementation requires config file parsing.
+func (m *Manager) Reload() error {
+	return fmt.Errorf("reload not fully implemented")
+}
+
+// Shutdown shuts down the daemon.
+// Stops all managed processes gracefully.
+func (m *Manager) Shutdown() error {
+	m.Mu.Lock()
+	defer m.Mu.Unlock()
+
+	for name := range m.Process {
+		proc := m.Process[name]
+		pid := proc.GetPid()
+		if pid > 0 {
+			p, err := os.FindProcess(pid)
+			if err == nil {
+				p.Signal(syscall.SIGTERM)
+			}
+		}
+		proc.SetStatus(bus.STOPPED)
+	}
+	return nil
 }
