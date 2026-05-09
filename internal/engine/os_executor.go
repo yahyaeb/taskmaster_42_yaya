@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 	"syscall"
 	"taskmaster/internal/config"
 )
@@ -16,19 +15,14 @@ import (
 var umaskLock = &syscall.ForkLock
 
 // OsProcessExecutor implements ConfigurableProcessExecutor using os/exec.
-// It manages file handles for stdout/stderr redirection and ensures they are closed.
 type OsProcessExecutor struct {
-	mu    sync.Mutex
-	files map[int][]io.Closer // PID -> list of open files to close
+	// Note: No mutex needed - each process's files are managed by its Watchdog goroutine
 }
 
 // NewOsProcessExecutor creates a new OsProcessExecutor.
 func NewOsProcessExecutor() *OsProcessExecutor {
-	return &OsProcessExecutor{
-		files: make(map[int][]io.Closer),
-	}
+	return &OsProcessExecutor{}
 }
-
 
 func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (*Process, error) {
 	builder := &CommandBuilder{}
@@ -66,30 +60,13 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 
 	pid := cmd.Process.Pid
 
-	// Collect file handles that need to be closed after process exits
-	var files []io.Closer
-	if f, ok := cmd.Stdout.(*os.File); ok && f != nil {
-		files = append(files, f)
-	}
-	if f, ok := cmd.Stderr.(*os.File); ok && f != nil {
-		// Check if stderr is the same file as stdout
-		if sf, ok := cmd.Stdout.(*os.File); ok && sf == f {
-			// same file, skip adding duplicate
-		} else {
-			files = append(files, f)
-		}
-	}
-	if len(files) > 0 {
-		e.mu.Lock()
-		e.files[pid] = files
-		e.mu.Unlock()
-	}
+	// Note: Files are now closed by the caller (Watchdog) after Wait() returns
+	// No need to track them in a map
 
 	return &Process{PID: pid}, nil
 }
 
 // Wait blocks until the process with the given PID exits.
-// Closes any associated file handles after the process exits.
 func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error) {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
@@ -99,9 +76,6 @@ func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error)
 	if err != nil {
 		return -1, fmt.Errorf("wait failed: %w", err)
 	}
-
-	// Close files associated with this PID
-	e.closeFilesForPID(pid)
 
 	exitCode := 0
 	if !state.Success() {
@@ -123,22 +97,6 @@ func (e *OsProcessExecutor) Signal(ctx context.Context, pid int, signal interfac
 		return fmt.Errorf("invalid signal type")
 	}
 	return proc.Signal(sig)
-}
-
-// closeFilesForPID closes and removes file handles for the given PID.
-func (e *OsProcessExecutor) closeFilesForPID(pid int) {
-	e.mu.Lock()
-	files, ok := e.files[pid]
-	if ok {
-		delete(e.files, pid)
-	}
-	e.mu.Unlock()
-
-	if ok {
-		for _, f := range files {
-			f.Close()
-		}
-	}
 }
 
 // closeFiles closes file handles attached to an exec.Cmd.

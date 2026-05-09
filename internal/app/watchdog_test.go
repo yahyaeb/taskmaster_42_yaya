@@ -86,15 +86,21 @@ func runWatchdog(t *testing.T, m *Manager, spec *config.ConfigSpec, updates chan
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	// Create or get ProcessInstance
-	m.Mu.Lock()
+	// Note: No mutex needed during test setup - event loop not running yet
 	proc, ok := m.Process[spec.ProcessName]
 	if !ok {
 		proc = &ProcessInstance{Status: bus.STOPPED}
 		m.Process[spec.ProcessName] = proc
 	}
-	m.Mu.Unlock()
 	go func() {
-		m.Watchdog(spec, proc, updates, stop)
+		// Use the new Watchdog signature - updates and stop come from m.ch
+		// For testing, we need to set up channels manually
+		if m.ch == nil {
+			m.ch = NewProcessChannels()
+		}
+		m.ch.Status = updates
+		m.ch.Stop[spec.ProcessName] = stop
+		m.Watchdog(spec, proc)
 		close(done)
 	}()
 	select {
@@ -267,9 +273,8 @@ func TestManagerWatchdogRetryCountIncrementsOnEachAttempt(t *testing.T) {
 		starttime:    0,
 		updatesCap:   20,
 		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
-			proc.Mu.RLock()
+			// Direct field access - test is single-threaded during check
 			count := proc.RetryCount
-			proc.Mu.RUnlock()
 
 			expectedAttempts := tc.startretries + 1
 			if count != expectedAttempts {
@@ -288,9 +293,8 @@ func TestManagerWatchdogRetryCountIncrementsOnProcessCrash(t *testing.T) {
 		starttime:    0,
 		updatesCap:   20,
 		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
-			proc.Mu.RLock()
+			// Direct field access - test is single-threaded during check
 			count := proc.RetryCount
-			proc.Mu.RUnlock()
 
 			expectedAttempts := tc.startretries + 1
 			if count != expectedAttempts {
@@ -312,9 +316,8 @@ func TestManagerWatchdogRetryCountResetsOnSuccessfulStart(t *testing.T) {
 			p.RetryCount = 5 // pre-set to non-zero
 		},
 		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
-			proc.Mu.RLock()
+			// Direct field access - test is single-threaded during check
 			count := proc.RetryCount
-			proc.Mu.RUnlock()
 
 			if count != 0 {
 				t.Errorf("expected RetryCount reset to 0 after successful start, got %d", count)
@@ -338,9 +341,8 @@ func TestManagerWatchdogLastStartSetOnSuccessfulSpawn(t *testing.T) {
 		starttime:    0,
 		updatesCap:   10,
 		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
-			proc.Mu.RLock()
+			// Direct field access - test is single-threaded during check
 			lastStart := proc.LastStart
-			proc.Mu.RUnlock()
 
 			if lastStart.IsZero() {
 				t.Error("expected LastStart to be set after successful spawn, got zero value")
@@ -362,9 +364,8 @@ func TestManagerWatchdogLastStartUpdatedOnRetry(t *testing.T) {
 		starttime:    0,
 		updatesCap:   20,
 		check: func(t *testing.T, tc *watchdogTestCase, mock *mockProcessExecutor, proc *ProcessInstance, updates []bus.ProcessUpdate) {
-			proc.Mu.RLock()
+			// Direct field access - test is single-threaded during check
 			lastStart := proc.LastStart
-			proc.Mu.RUnlock()
 
 			if lastStart.IsZero() {
 				t.Error("expected LastStart to be set after retry cycles, got zero value")
@@ -475,8 +476,13 @@ func TestManagerResilientToCrashingProcess(t *testing.T) {
 			}
 			close(done)
 		}()
-		stop := make(chan struct{})
-		m.Watchdog(spec, proc, updates, stop)
+		// Use the new Watchdog signature - updates and stop come from m.ch
+		if m.ch == nil {
+			m.ch = NewProcessChannels()
+		}
+		m.ch.Status = updates
+		m.ch.Stop[spec.ProcessName] = make(chan struct{})
+		m.Watchdog(spec, proc)
 	}()
 
 	select {
@@ -502,9 +508,8 @@ func TestManagerProcessEntrySurvivesWatchdogFailure(t *testing.T) {
 			m := watchdogManager(mock)
 			// Re-add the process to check it survives (mockManager creates fresh manager)
 			m.Process["worker:00"] = proc
-			m.Mu.RLock()
+			// Direct access - test is single-threaded
 			_, exists := m.Process["worker:00"]
-			m.Mu.RUnlock()
 
 			if !exists {
 				t.Error("ProcessInstance was removed from Manager after watchdog failure — it must remain for status queries")
@@ -527,9 +532,8 @@ func TestManagerOtherProcessesUnaffectedByWatchdogFailure(t *testing.T) {
 	updates := make(chan bus.ProcessUpdate, 10)
 	runWatchdog(t, m, spec, updates, 5*time.Second)
 
-	m.Mu.RLock()
+	// Direct access - test is single-threaded
 	_, serverExists := m.Process["server:00"]
-	m.Mu.RUnlock()
 
 	if !serverExists {
 		t.Error("unrelated process 'server:00' was removed from Manager — failure must be isolated")
