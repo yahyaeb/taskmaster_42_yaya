@@ -107,9 +107,7 @@ func main() {
 		return
 	}
 
-	for {
-		select {
-		case <-sighup:
+	for range sighup {
 			fmt.Println("Hot-reloading configuration...")
 
 			newManager, err := app.NewManagerFromConfig("config.yml")
@@ -126,7 +124,5 @@ func main() {
 			// Atomically swap manager reference
 			managerRef.SetManager(newManager)
 			manager = newManager
-
-		}
 	}
 }
