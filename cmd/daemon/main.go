@@ -19,8 +19,8 @@ func read(inputChan chan string) {
 
 func main() {
 	ch := app.NewProcessChannels()
+
 	sighup := make(chan os.Signal, 1)
-	input := make(chan string)
 
 	manager, err := app.NewManagerFromConfig("config.yml")
 	if err != nil {
@@ -36,8 +36,6 @@ func main() {
 	manager.Spawn(app.NewManager())
 	signal.Notify(sighup, syscall.SIGHUP)
 
-	go read(input)
-
 	socketPath := "/tmp/taskmaster.sock"
 	_, err = app.StartSocketListener(socketPath, manager)
 	if err != nil {
@@ -46,8 +44,6 @@ func main() {
 	}
 
 	for {
-		fmt.Print("> ")
-
 		select {
 		case <-sighup:
 			fmt.Println("Hot-reloading configuration...")
@@ -71,9 +67,6 @@ func main() {
 
 		case cmd := <-ch.Commands:
 			handleCommand(manager, cmd)
-
-		case in := <-input:
-			handleInput(manager, ch, sighup, in)
 		}
 	}
 }

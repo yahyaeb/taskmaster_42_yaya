@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"slices"
 	"strings"
@@ -212,13 +213,17 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 		strategy = engine.RetryStrategyFactory(setting.Autorestart, setting.Exitcodes)
 	}
 
-	maxAttempts := setting.Startretries + 1
-	if maxAttempts <= 0 {
-		maxAttempts = 1
+	// For autorestart=always, use unlimited retries. For others, use startretries.
+	var maxRetries int
+	if _, isAlwaysRestart := strategy.(*engine.AlwaysRestart); isAlwaysRestart {
+		maxRetries = math.MaxInt  // Restart indefinitely for autorestart=always
+	} else {
+		maxRetries = setting.Startretries
 	}
+
 	retryDelay := time.Duration(0)
 
-	watcher := engine.NewProcessWatcherWithStrategy(m.executor, strategy, setting.Startretries, retryDelay)
+	watcher := engine.NewProcessWatcherWithStrategy(m.executor, strategy, maxRetries, retryDelay)
 	watcher.StarttimeSec = setting.Starttime
 
 	if proc == nil {
