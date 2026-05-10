@@ -62,3 +62,4 @@ repomix-output.xml
 # Binary files
 *.bin
 .cursor/
+.claude/

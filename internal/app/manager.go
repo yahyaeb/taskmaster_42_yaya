@@ -253,9 +253,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 	watcher.OnProcessRunning = func(pid int) {
 		// Direct field access - Watchdog owns this ProcessInstance
 		proc.Status = bus.RUNNING
-		fmt.Printf("[DEBUG] Sending status update for %s to RUNNING\n", setting.ProcessName)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.RUNNING, Pid: pid}
-		fmt.Printf("[DEBUG] Status update sent for %s\n", setting.ProcessName)
 		slog.Info("started program", "program", setting.Program, "pid", pid)
 	}
 

@@ -6,17 +6,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 	"syscall"
 	"taskmaster/internal/config"
 )
 
+
 // OsProcessExecutor implements ConfigurableProcessExecutor using os/exec.
-// It stores a reference to the actual *os.Process object for each started process
-// to ensure Wait() waits on the correct process even if the PID is reused by the OS.
 type OsProcessExecutor struct {
-	// processMap stores PID -> *os.Process to prevent PID-reuse confusion
-	processMap sync.Map // map[int]*os.Process
+	// Note: No mutex needed - each process's files are managed by its Watchdog goroutine
 }
 
 // NewOsProcessExecutor creates a new OsProcessExecutor.
@@ -31,7 +28,7 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 		return nil, fmt.Errorf("build command failed: %w", err)
 	}
 
-	// If context is provided, create a context-aware command while preserving all configuration
+	// If context is provided, replace with context-aware command while preserving configuration
 	if ctx != nil {
 		newCmd := exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 		newCmd.Dir = cmd.Dir
@@ -58,9 +55,6 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 
 	pid := cmd.Process.Pid
 
-	// Store the actual process object to prevent PID-reuse issues when Wait() is called later
-	e.processMap.Store(pid, cmd.Process)
-
 	// Note: Files are now closed by the caller (Watchdog) after Wait() returns
 	// No need to track them in a map
 
@@ -68,21 +62,10 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 }
 
 // Wait blocks until the process with the given PID exits.
-// Uses the stored process object to ensure we wait on the correct process instance,
-// even if the OS has reused the PID for a different process.
 func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error) {
-	// Try to find the stored process object for this PID
-	var proc *os.Process
-	if stored, ok := e.processMap.Load(pid); ok {
-		proc = stored.(*os.Process)
-	} else {
-		// Fallback: if not found in map, try to find by PID
-		// This can happen if the process was started before this executor was created
-		var err error
-		proc, err = os.FindProcess(pid)
-		if err != nil {
-			return -1, fmt.Errorf("find process failed: %w", err)
-		}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return -1, fmt.Errorf("find process failed: %w", err)
 	}
 
 	// Check for cancellation before waiting
@@ -100,9 +83,6 @@ func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error)
 
 	go func() {
 		state, err := proc.Wait()
-		// Clean up the process map entry after waiting
-		defer e.processMap.Delete(pid)
-
 		if err != nil {
 			done <- struct {
 				exitCode ExitCode
@@ -112,10 +92,19 @@ func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error)
 		}
 
 		exitCode := 0
-		if !state.Success() {
-			if exitStatus, ok := state.Sys().(syscall.WaitStatus); ok {
+		// Check if process was killed by signal vs normal exit
+		if exitStatus, ok := state.Sys().(syscall.WaitStatus); ok {
+			if exitStatus.Signaled() {
+				// Killed by signal - use Unix convention: 128 + signal number
+				// This ensures signal deaths are treated as "non-zero exit" for restart logic
+				exitCode = 128 + int(exitStatus.Signal())
+			} else if !state.Success() {
+				// Normal non-zero exit
 				exitCode = exitStatus.ExitStatus()
 			}
+		} else if !state.Success() {
+			// Fallback: non-zero exit but can't get details
+			exitCode = 1
 		}
 		done <- struct {
 			exitCode ExitCode
@@ -134,19 +123,10 @@ func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error)
 
 // Signal sends a signal to the process with the given PID.
 func (e *OsProcessExecutor) Signal(ctx context.Context, pid int, signal interface{}) error {
-	// Try to find the stored process object first
-	var proc *os.Process
-	if stored, ok := e.processMap.Load(pid); ok {
-		proc = stored.(*os.Process)
-	} else {
-		// Fallback: find by PID if not in map
-		var err error
-		proc, err = os.FindProcess(pid)
-		if err != nil {
-			return fmt.Errorf("find process failed: %w", err)
-		}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("find process failed: %w", err)
 	}
-
 	sig, ok := signal.(os.Signal)
 	if !ok {
 		return fmt.Errorf("invalid signal type")
