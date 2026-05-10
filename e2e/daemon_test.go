@@ -35,6 +35,11 @@ func TestMain(m *testing.M) {
 	}
 	tmpDir := os.TempDir()
 
+	// Clean logs directory for fresh test run
+	logsDir := filepath.Join(projectRoot, "e2e", "logs")
+	_ = os.RemoveAll(logsDir)
+	_ = os.MkdirAll(logsDir, 0755)
+
 	builds := []struct {
 		dest string
 		pkg  string
@@ -81,7 +86,7 @@ func startDaemon(t *testing.T, config string) *daemon {
 
 	// Create persistent logs directory for debugging
 	logsDir := filepath.Join("logs")
-	os.MkdirAll(logsDir, 0755)
+	_ = os.MkdirAll(logsDir, 0755)
 
 	// Use test name and timestamp for unique log filename
 	logPath := filepath.Join(logsDir, fmt.Sprintf("%s-%d.log", t.Name(), time.Now().Unix()))
@@ -222,6 +227,35 @@ func pollStatus(t *testing.T, processName, wantStatus string, timeout time.Durat
 			if proc["name"] == processName {
 				last, _ = proc["status"].(string)
 				if last == wantStatus {
+					return last
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return last
+}
+
+// pollStatusNot polls until the named process has a status other than notStatus,
+// or the timeout elapses. Returns the last observed status.
+// Use this after an external kill to confirm the daemon detected the process death
+// before polling for the restarted process.
+func pollStatusNot(t *testing.T, processName, notStatus string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last string
+	for time.Now().Before(deadline) {
+		resp := rpcCall(t, "Taskmaster.GetStatus", nil)
+		if resp["error"] != nil {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		list, _ := resp["result"].([]any)
+		for _, item := range list {
+			proc, _ := item.(map[string]any)
+			if proc["name"] == processName {
+				last, _ = proc["status"].(string)
+				if last != notStatus {
 					return last
 				}
 			}

@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -128,9 +129,25 @@ func (m *Manager) Run() {
 		case cmd := <-m.commandCh:
 			m.handleCommand(cmd)
 		case query := <-m.queryCh:
+			// Drain pending status updates before answering queries so that
+			// proc state reflects the latest watcher-reported transitions.
+			m.drainStatus()
 			m.handleQuery(query)
 		case update := <-m.ch.Status:
 			m.handleStatusUpdate(update)
+		}
+	}
+}
+
+// drainStatus processes all pending status updates from the Status channel
+// without blocking. Called before query responses to ensure fresh proc state.
+func (m *Manager) drainStatus() {
+	for {
+		select {
+		case update := <-m.ch.Status:
+			m.handleStatusUpdate(update)
+		default:
+			return
 		}
 	}
 }
@@ -178,11 +195,18 @@ func (m *Manager) handleQuery(query ManagerQuery) {
 }
 
 // handleStatusUpdate processes a status update from a Watchdog.
+// Called exclusively from the event loop goroutine — no locking needed.
 func (m *Manager) handleStatusUpdate(update bus.ProcessUpdate) {
 	if proc, ok := m.Process[update.Name]; ok {
 		proc.Status = update.Status
 		if update.Pid > 0 {
 			proc.Pid = update.Pid
+		}
+		if update.HasRetries {
+			proc.RetryCount = update.Retries
+		}
+		if !update.LastStart.IsZero() {
+			proc.LastStart = update.LastStart
 		}
 	}
 }
@@ -239,41 +263,51 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 		return
 	}
 
-	watcher.OnProcessStarted = func(pid int) {
-		// Direct field access - Watchdog owns this ProcessInstance
-		proc.Pid = pid
-		proc.Status = bus.STARTING
-		proc.LastStart = time.Now()
-		proc.RetryCount = 0
+	// currentPID tracks the PID of the currently managed process.
+	// Written by the watcher goroutine (OnProcessStarted callback), read by the
+	// Watchdog goroutine (stop handler). Uses atomic to avoid a data race.
+	var currentPID atomic.Int32
 
-		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STARTING, Pid: pid}
+	watcher.OnProcessStarted = func(pid int) {
+		// Track current PID via atomic for the stop handler (Watchdog goroutine reads it).
+		// All other proc state is updated exclusively by the event loop via channel.
+		currentPID.Store(int32(pid))
+		updates <- bus.ProcessUpdate{
+			Name:       setting.ProcessName,
+			Status:     bus.STARTING,
+			Pid:        pid,
+			Retries:    0,
+			LastStart:  time.Now(),
+			HasRetries: true,
+		}
 		slog.Info("program starting", "program", setting.Program, "pid", pid)
 	}
 
 	watcher.OnProcessRunning = func(pid int) {
-		// Direct field access - Watchdog owns this ProcessInstance
-		proc.Status = bus.RUNNING
+		// No direct proc write — event loop applies state change via channel update.
+		// This ensures proc.Status becomes RUNNING only after the event loop
+		// processes this message, preventing stale-status races in GetStatus queries.
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.RUNNING, Pid: pid}
 		slog.Info("started program", "program", setting.Program, "pid", pid)
 	}
 
 	watcher.OnBackoff = func(attempt int) {
-		// Direct field access - Watchdog owns this ProcessInstance
-		proc.Status = bus.BACKOFF
-		proc.RetryCount = attempt
-		// Note: PID is not available during backoff (process hasn't started yet)
-		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.BACKOFF, Pid: proc.Pid}
+		// No PID in backoff update: the process is dead, and including the old PID
+		// would clobber proc.Pid before the new process's PID is set by OnProcessStarted.
+		updates <- bus.ProcessUpdate{
+			Name:       setting.ProcessName,
+			Status:     bus.BACKOFF,
+			Retries:    attempt,
+			HasRetries: true,
+		}
 		slog.Info("program backoff", "program", setting.Program, "attempt", attempt)
 	}
 
 	watcher.OnSpawnFailed = func(attempt int) {
-		// Direct field access - Watchdog owns this ProcessInstance
-		proc.RetryCount = attempt
+		// Retry count is tracked via OnBackoff updates; nothing extra to do here.
 	}
 
 	watcher.OnStarting = func() {
-		// Direct field access - Watchdog owns this ProcessInstance
-		proc.Status = bus.STARTING
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STARTING}
 		slog.Info("program starting (retry)", "program", setting.Program)
 	}
@@ -297,8 +331,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 	case <-stop:
 		// cancel() - do not cancel, let watcher wait for process response
 
-		// Direct field access - Watchdog owns this ProcessInstance
-		pid := proc.Pid
+		pid := int(currentPID.Load())
 		if pid > 0 {
 			sig, _ := engine.SignalFromString(setting.Stopsignal)
 			if sig == nil {

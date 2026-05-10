@@ -1,5 +1,7 @@
 package bus
 
+import "time"
+
 // Status represents the runtime status of a process.
 type Status string
 
@@ -13,9 +15,14 @@ const (
 
 // ProcessUpdate represents a status update from a process.
 type ProcessUpdate struct {
-	Name   string
-	Status Status
-	Pid    int
+	Name      string
+	Status    Status
+	Pid       int
+	Retries   int
+	LastStart time.Time
+	// HasRetries must be true for the Retries field to be applied.
+	// Distinguishes "retry count is 0" from "not provided".
+	HasRetries bool
 }
 
 // Updates is a channel for process updates.

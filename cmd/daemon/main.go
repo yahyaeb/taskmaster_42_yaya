@@ -127,10 +127,6 @@ func main() {
 			managerRef.SetManager(newManager)
 			manager = newManager
 
-		case msg := <-ch.Status:
-			// Status updates are now handled by the Manager's event loop
-			// We just log them here for visibility
-			fmt.Printf("Updated status for program %s: %s\n", msg.Name, msg.Status)
 		}
 	}
 }
