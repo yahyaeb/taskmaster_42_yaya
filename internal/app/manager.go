@@ -390,20 +390,13 @@ func (curr *Manager) Spawn(prev *Manager) {
 		return
 	}
 
-	// Note: No mutex needed - this is called during init before Run() or from event loop
 	prevKeys := make([]string, 0, len(prev.Config))
 	for name := range prev.Config {
 		prevKeys = append(prevKeys, name)
 	}
 
 	for name, setting := range curr.Config {
-		found := false
-		for _, prevName := range prevKeys {
-			if prevName == name {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(prevKeys, name)
 
 		if !found {
 			go curr.Watchdog(setting, curr.Process[name])
