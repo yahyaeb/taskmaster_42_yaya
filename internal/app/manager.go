@@ -145,7 +145,9 @@ func (m *Manager) handleCommand(cmd ManagerCommand) {
 	case "restart":
 		cmd.Resp <- m.restartInternal(cmd.Name)
 	case "reload":
-		cmd.Resp <- m.reloadInternal()
+		result, err := m.reloadInternal()
+		cmd.ReloadResp <- ReloadCommandResult{Result: result, Err: err}
+		cmd.Resp <- err
 	case "shutdown":
 		cmd.Resp <- m.shutdownInternal()
 	case "spawn":
@@ -288,12 +290,16 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 
 	select {
 	case <-stop:
-		cancel()
+		// cancel() - do not cancel, let watcher wait for process response
 
 		// Direct field access - Watchdog owns this ProcessInstance
 		pid := proc.Pid
 		if pid > 0 {
-			stopper := engine.NewProcessStopper(m.handler, m.executor, time.Duration(setting.Stoptime)*time.Second)
+			sig, _ := engine.SignalFromString(setting.Stopsignal)
+			if sig == nil {
+				sig, _ = engine.SignalFromString("TERM") // Default to TERM
+			}
+			stopper := engine.NewProcessStopper(m.handler, m.executor, time.Duration(setting.Stoptime)*time.Second, sig)
 			p := &engine.Process{PID: pid}
 			if err := stopper.Stop(p); err != nil {
 				slog.Error("error stopping program", "program", setting.Program, "error", err)
@@ -404,6 +410,9 @@ func (curr *Manager) Spawn(prev *Manager) {
 		found := slices.Contains(prevKeys, name)
 
 		if !found {
+			if _, ok := curr.ch.Stop[name]; !ok {
+				curr.ch.Stop[name] = make(chan struct{})
+			}
 			go curr.Watchdog(setting, curr.Process[name])
 			slog.Info("started new program", "name", setting.ProcessName)
 		}
@@ -615,9 +624,16 @@ func (m *Manager) stopInternal(name string) error {
 
 	// Also try to signal the process directly if we have a PID
 	if pid > 0 {
+		cfgSpec, ok := m.Config[name]
+		sig := os.Signal(syscall.SIGTERM) // Default
+		if ok && cfgSpec.Stopsignal != "" {
+			if s, err := engine.SignalFromString(cfgSpec.Stopsignal); err == nil {
+				sig = s
+			}
+		}
 		p, err := os.FindProcess(pid)
 		if err == nil {
-			p.Signal(syscall.SIGTERM)
+			p.Signal(sig)
 		}
 	}
 
@@ -664,15 +680,10 @@ type ReloadResult struct {
 // Sends a command to the event loop and waits for response.
 func (m *Manager) Reload() (*ReloadResult, error) {
 	resp := make(chan error, 1)
-	m.commandCh <- ManagerCommand{Type: "reload", Resp: resp}
-	err := <-resp
-	// Note: reloadInternal returns the result via a side channel since
-	// we need both error and result. For simplicity, we handle this specially.
-	// For now, return nil result on success - this needs a more sophisticated approach
-	if err != nil {
-		return nil, err
-	}
-	return &ReloadResult{}, nil
+	reloadResp := make(chan ReloadCommandResult, 1)
+	m.commandCh <- ManagerCommand{Type: "reload", Resp: resp, ReloadResp: reloadResp}
+	result := <-reloadResp
+	return result.Result, result.Err
 }
 
 // ReloadFromConfig applies a new configuration to the manager.
@@ -759,16 +770,16 @@ func (m *Manager) reloadFromConfigInternal(newConfig map[string]*config.ConfigSp
 }
 
 // reloadInternal handles the reload command from the event loop.
-func (m *Manager) reloadInternal() error {
+func (m *Manager) reloadInternal() (*ReloadResult, error) {
 	if m.configPath == "" {
-		return fmt.Errorf("no config path stored, use NewManagerFromConfig() to initialize Manager")
+		return nil, fmt.Errorf("no config path stored, use NewManagerFromConfig() to initialize Manager")
 	}
 
 	// Load new config from disk
 	loader := &config.YAMLLoader{}
 	specs, err := loader.Load(m.configPath)
 	if err != nil {
-		return fmt.Errorf("reload config: %w", err)
+		return nil, fmt.Errorf("reload config: %w", err)
 	}
 
 	// Convert specs to config map
@@ -779,8 +790,8 @@ func (m *Manager) reloadInternal() error {
 	}
 
 	// Apply the diff
-	_, err = m.reloadFromConfigInternal(newConfig)
-	return err
+	result, err := m.reloadFromConfigInternal(newConfig)
+	return result, err
 }
 
 // configChanged returns true if two config specs are different.

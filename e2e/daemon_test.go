@@ -85,7 +85,7 @@ func startDaemon(t *testing.T, config string) *daemon {
 
 	// Use test name and timestamp for unique log filename
 	logPath := filepath.Join(logsDir, fmt.Sprintf("%s-%d.log", t.Name(), time.Now().Unix()))
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0644)
 	if err != nil {
 		t.Fatalf("startDaemon: create log file: %v", err)
 	}

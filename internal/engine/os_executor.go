@@ -67,18 +67,49 @@ func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error)
 	if err != nil {
 		return -1, fmt.Errorf("find process failed: %w", err)
 	}
-	state, err := proc.Wait()
-	if err != nil {
-		return -1, fmt.Errorf("wait failed: %w", err)
+
+	// Check for cancellation before waiting
+	select {
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	default:
 	}
 
-	exitCode := 0
-	if !state.Success() {
-		if exitStatus, ok := state.Sys().(syscall.WaitStatus); ok {
-			exitCode = exitStatus.ExitStatus()
+	// Use a goroutine to wait on the process in parallel with context
+	done := make(chan struct {
+		exitCode ExitCode
+		err      error
+	}, 1)
+
+	go func() {
+		state, err := proc.Wait()
+		if err != nil {
+			done <- struct {
+				exitCode ExitCode
+				err      error
+			}{-1, fmt.Errorf("wait failed: %w", err)}
+			return
 		}
+
+		exitCode := 0
+		if !state.Success() {
+			if exitStatus, ok := state.Sys().(syscall.WaitStatus); ok {
+				exitCode = exitStatus.ExitStatus()
+			}
+		}
+		done <- struct {
+			exitCode ExitCode
+			err      error
+		}{ExitCode(exitCode), nil}
+	}()
+
+	// Wait for either the process or context cancellation
+	select {
+	case result := <-done:
+		return result.exitCode, result.err
+	case <-ctx.Done():
+		return -1, ctx.Err()
 	}
-	return ExitCode(exitCode), nil
 }
 
 // Signal sends a signal to the process with the given PID.

@@ -36,11 +36,18 @@ type Command struct {
 	Resp   chan error // async response
 }
 
+// ReloadCommandResult holds the result of a reload command
+type ReloadCommandResult struct {
+	Result *ReloadResult
+	Err    error
+}
+
 // ManagerCommand represents a command sent to the Manager's event loop
 type ManagerCommand struct {
-	Type string // "start", "stop", "restart", "reload", "shutdown", "spawn"
-	Name string // process name (if applicable)
-	Resp chan error
+	Type       string // "start", "stop", "restart", "reload", "shutdown", "spawn"
+	Name       string // process name (if applicable)
+	Resp       chan error
+	ReloadResp chan ReloadCommandResult // for reload command only
 }
 
 // ManagerQuery represents a query sent to the Manager's event loop
