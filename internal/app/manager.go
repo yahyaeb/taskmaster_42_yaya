@@ -89,8 +89,6 @@ type Manager struct {
 	commandCh chan ManagerCommand
 	// queryCh receives queries for the event loop (get, list)
 	queryCh chan ManagerQuery
-	// running signals when the event loop has started
-	running chan struct{}
 }
 
 func NewManager() *Manager {
@@ -101,7 +99,6 @@ func NewManager() *Manager {
 		handler:   &engine.OSSignalHandler{},
 		commandCh: make(chan ManagerCommand, 100),
 		queryCh:   make(chan ManagerQuery, 100),
-		running:   make(chan struct{}),
 	}
 }
 
@@ -120,10 +117,9 @@ func (m *Manager) Channels() *ProcessChannels {
 	return m.ch
 }
 
-// Run starts the Manager's event loop. It must be called in a goroutine.
+// EventLoop starts the Manager's event loop. It must be called in a goroutine.
 // The event loop owns all Manager state and processes commands/queries synchronously.
-func (m *Manager) Run() {
-	close(m.running) // Signal that event loop is running
+func (m *Manager) EventLoop() {
 	for {
 		select {
 		case cmd := <-m.commandCh:
@@ -150,11 +146,6 @@ func (m *Manager) drainStatus() {
 			return
 		}
 	}
-}
-
-// WaitForRunning blocks until the event loop has started.
-func (m *Manager) WaitForRunning() {
-	<-m.running
 }
 
 // handleCommand processes a ManagerCommand synchronously.
@@ -247,7 +238,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 	// For autorestart=always, use unlimited retries. For others, use startretries.
 	var maxRetries int
 	if _, isAlwaysRestart := strategy.(*engine.AlwaysRestart); isAlwaysRestart {
-		maxRetries = math.MaxInt  // Restart indefinitely for autorestart=always
+		maxRetries = math.MaxInt // Restart indefinitely for autorestart=always
 	} else {
 		maxRetries = setting.Startretries
 	}

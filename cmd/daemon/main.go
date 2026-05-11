@@ -91,7 +91,7 @@ func main() {
 	manager.SetChannels(ch)
 
 	// Start the Manager's event loop in a goroutine
-	go manager.Run()
+	go manager.EventLoop()
 
 	manager.Spawn(app.NewManager())
 
@@ -108,21 +108,21 @@ func main() {
 	}
 
 	for range sighup {
-			fmt.Println("Hot-reloading configuration...")
+		fmt.Println("Hot-reloading configuration...")
 
-			newManager, err := app.NewManagerFromConfig("config.yml")
-			if err != nil {
-				fmt.Printf("Error reloading configuration: %v\n", err)
-				continue
-			}
+		newManager, err := app.NewManagerFromConfig("config.yml")
+		if err != nil {
+			fmt.Printf("Error reloading configuration: %v\n", err)
+			continue
+		}
 
-			newManager.SetChannels(ch)
-			// Start the new manager's event loop
-			go newManager.Run()
-			newManager.Spawn(manager)
+		newManager.SetChannels(ch)
+		// Start the new manager's event loop
+		go newManager.EventLoop()
+		newManager.Spawn(manager)
 
-			// Atomically swap manager reference
-			managerRef.SetManager(newManager)
-			manager = newManager
+		// Atomically swap manager reference
+		managerRef.SetManager(newManager)
+		manager = newManager
 	}
 }
