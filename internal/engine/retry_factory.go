@@ -1,32 +1,32 @@
 package engine
 
-// RetryStrategyFactory creates a RetryStrategy based on autorestart string and exit codes.
-func RetryStrategyFactory(autorestart string, exitcodes []int) RetryStrategy {
+// RetryStrategyFactory creates a RetryStrategyFunc based on autorestart string and exit codes.
+func RetryStrategyFactory(autorestart string, exitcodes []int) RetryStrategyFunc {
 	switch autorestart {
 	case "always":
-		return &AlwaysRestart{}
+		return AlwaysRestart()
 	case "never":
-		return &NeverRestart{}
+		return NeverRestart()
 	case "unexpected":
-		return &UnexpectedOnlyRestart{AllowedCodes: exitcodes}
+		return UnexpectedOnlyRestart(exitcodes)
 	default:
 		// Default to never restart for unknown values
-		return &NeverRestart{}
+		return NeverRestart()
 	}
 }
 
-// RetryStrategyFromExpectedCodes creates a RetryStrategy from an ExpectedCodes map.
+// RetryStrategyFromExpectedCodes creates a RetryStrategyFunc from an ExpectedCodes map.
 // If expectedCodes is nil, only exit code 0 is considered expected (unexpected restart).
 // If expectedCodes is empty, all exit codes are unexpected (always restart).
 // Otherwise, only the keys with true values are considered expected exit codes.
-func RetryStrategyFromExpectedCodes(expectedCodes map[int]bool) RetryStrategy {
+func RetryStrategyFromExpectedCodes(expectedCodes map[int]bool) RetryStrategyFunc {
 	if expectedCodes == nil {
 		// nil map → only exit code 0 is expected
-		return &UnexpectedOnlyRestart{AllowedCodes: []int{0}}
+		return UnexpectedOnlyRestart([]int{0})
 	}
 	if len(expectedCodes) == 0 {
 		// Empty map → all exit codes are unexpected, always restart
-		return &AlwaysRestart{}
+		return AlwaysRestart()
 	}
 	// Collect keys where value is true
 	var allowed []int
@@ -35,5 +35,5 @@ func RetryStrategyFromExpectedCodes(expectedCodes map[int]bool) RetryStrategy {
 			allowed = append(allowed, code)
 		}
 	}
-	return &UnexpectedOnlyRestart{AllowedCodes: allowed}
+	return UnexpectedOnlyRestart(allowed)
 }

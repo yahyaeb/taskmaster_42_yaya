@@ -18,48 +18,32 @@ import (
 	"taskmaster/internal/protocol"
 )
 
-// ProcessQuerier defines methods for querying process status.
-type ProcessQuerier interface {
+
+// ProcessManager defines the RPC-facing interface for process management.
+// Minimal interface for daemon/socket communication.
+type ProcessManager interface {
 	GetProcessInfo(name string) (protocol.ProcessInfo, error)
 	GetAllProcessInfo() ([]protocol.ProcessInfo, error)
-}
-
-// ProcessController defines methods for controlling individual processes.
-type ProcessController interface {
 	Start(name string) error
 	Stop(name string) error
 	Restart(name string) error
-}
-
-// DaemonController defines methods for daemon-level operations.
-type DaemonController interface {
 	Reload() (*ReloadResult, error)
 	Shutdown() error
 }
-
-// ManagerInterface defines the boundary for RPC handlers.
-// Handlers use this interface; production uses *Manager which implements it.
-// Composed of smaller focused interfaces for better segregation.
-type ManagerInterface interface {
-	ProcessQuerier
-	ProcessController
-	DaemonController
-}
-
 type ProcessInstance struct {
 	Pid        int
 	Status     bus.Status
 	RetryCount int
 	LastStart  time.Time
 	Intended   bool
-	Strategy   engine.RetryStrategy
+	Strategy   engine.RetryStrategyFunc
 	// Note: ProcessInstance is owned exclusively by its Watchdog goroutine
 	// No mutex needed - all access is serialized through channels
 }
 
 // newProcessInstance creates a new ProcessInstance with the given autostart setting
 // and optional retry strategy. This factory ensures consistent initialization.
-func newProcessInstance(autostart bool, strategy engine.RetryStrategy) *ProcessInstance {
+func newProcessInstance(autostart bool, strategy engine.RetryStrategyFunc) *ProcessInstance {
 	return &ProcessInstance{
 		Status:     bus.STOPPED,
 		Intended:   autostart,
@@ -67,10 +51,6 @@ func newProcessInstance(autostart bool, strategy engine.RetryStrategy) *ProcessI
 		Strategy:   strategy,
 	}
 }
-
-// Note: All ProcessInstance methods removed - state is accessed directly
-// by the Watchdog goroutine that owns it. External access goes through
-// the Manager's event loop which receives updates via the Status channel.
 
 type Manager struct {
 	Config   map[string]*config.ConfigSpec
@@ -149,20 +129,21 @@ func (m *Manager) drainStatus() {
 }
 
 // handleCommand processes a ManagerCommand synchronously.
+// Inlines all command execution logic directly.
 func (m *Manager) handleCommand(cmd ManagerCommand) {
 	switch cmd.Type {
 	case "start":
-		cmd.Resp <- m.startInternal(cmd.Name)
+		cmd.Resp <- m.doStart(cmd.Name)
 	case "stop":
-		cmd.Resp <- m.stopInternal(cmd.Name)
+		cmd.Resp <- m.doStop(cmd.Name)
 	case "restart":
-		cmd.Resp <- m.restartInternal(cmd.Name)
+		cmd.Resp <- m.doRestart(cmd.Name)
 	case "reload":
-		result, err := m.reloadInternal()
+		result, err := m.doReload()
 		cmd.ReloadResp <- ReloadCommandResult{Result: result, Err: err}
 		cmd.Resp <- err
 	case "shutdown":
-		cmd.Resp <- m.shutdownInternal()
+		cmd.Resp <- m.doShutdown()
 	case "spawn":
 		// Spawn is handled internally during init/reload
 		cmd.Resp <- nil
@@ -171,15 +152,199 @@ func (m *Manager) handleCommand(cmd ManagerCommand) {
 	}
 }
 
+// doStart executes start logic in the event loop.
+func (m *Manager) doStart(name string) error {
+	if m.ch == nil {
+		return fmt.Errorf("process channels not set")
+	}
+
+	configSpec, exists := m.Config[name]
+	if !exists {
+		return fmt.Errorf("process not found: %s", name)
+	}
+
+	// Check if watchdog is already running
+	if m.isRunning(name) {
+		return nil // Idempotent: already running is not an error
+	}
+
+	// Create stop channel if not exists
+	if _, ok := m.ch.Stop[name]; !ok {
+		m.ch.Stop[name] = make(chan struct{})
+	}
+
+	// Ensure ProcessInstance exists
+	if _, ok := m.Process[name]; !ok {
+		strategy := engine.RetryStrategyFactory(configSpec.Autorestart, configSpec.Exitcodes)
+		m.Process[name] = newProcessInstance(true, strategy)
+	}
+
+	// Set process as starting
+	m.Process[name].Status = bus.STARTING
+
+	// Spawn watchdog goroutine
+	go m.Watchdog(configSpec, m.Process[name])
+
+	slog.Info("RPC Start requested", "name", name)
+	return nil
+}
+
+// doStop executes stop logic in the event loop.
+func (m *Manager) doStop(name string) error {
+	if m.ch == nil {
+		return fmt.Errorf("process channels not set")
+	}
+
+	_, exists := m.Config[name]
+	if !exists {
+		return fmt.Errorf("process not found: %s", name)
+	}
+
+	// Check if watchdog is running
+	stopChan, running := m.ch.Stop[name]
+	if !running {
+		return nil // Idempotent: not running is not an error
+	}
+
+	// Get the process instance for PID (may not exist if never started)
+	pid := 0
+	if proc, ok := m.Process[name]; ok {
+		pid = proc.Pid
+	}
+
+	// Signal watchdog to stop by closing the stop channel
+	closeChannel(stopChan)
+
+	// Also try to signal the process directly if we have a PID
+	if pid > 0 {
+		cfgSpec, ok := m.Config[name]
+		sig := os.Signal(syscall.SIGTERM) // Default
+		if ok && cfgSpec.Stopsignal != "" {
+			if s, err := engine.SignalFromString(cfgSpec.Stopsignal); err == nil {
+				sig = s
+			}
+		}
+		p, err := os.FindProcess(pid)
+		if err == nil {
+			p.Signal(sig)
+		}
+	}
+
+	// Remove from stops map and update status
+	delete(m.ch.Stop, name)
+	if proc, ok := m.Process[name]; ok {
+		proc.Status = bus.STOPPED
+	}
+
+	slog.Info("RPC Stop requested", "name", name)
+	return nil
+}
+
+// doRestart executes restart logic in the event loop.
+func (m *Manager) doRestart(name string) error {
+	// Stop the process
+	if err := m.doStop(name); err != nil {
+		return err
+	}
+
+	// Brief wait to allow process cleanup
+	time.Sleep(100 * time.Millisecond)
+
+	// Start the process
+	return m.doStart(name)
+}
+
+// doReload executes reload logic in the event loop.
+func (m *Manager) doReload() (*ReloadResult, error) {
+	if m.configPath == "" {
+		return nil, fmt.Errorf("no config path stored, use NewManagerFromConfig() to initialize Manager")
+	}
+
+	// Load new config from disk
+	loader := &config.YAMLLoader{}
+	specs, err := loader.Load(m.configPath)
+	if err != nil {
+		return nil, fmt.Errorf("reload config: %w", err)
+	}
+
+	// Convert specs to config map
+	newConfig := make(map[string]*config.ConfigSpec)
+	for i := range specs {
+		spec := &specs[i]
+		newConfig[spec.ProcessName] = spec
+	}
+
+	// Apply the diff
+	return m.applyConfigDiff(newConfig)
+}
+
+// doShutdown executes shutdown logic in the event loop.
+func (m *Manager) doShutdown() error {
+	// Signal all processes to stop, including those without active watchdogs
+	for name, proc := range m.Process {
+		// Stop watchdog if running
+		if m.ch != nil {
+			if stopChan, ok := m.ch.Stop[name]; ok {
+				closeChannel(stopChan)
+				delete(m.ch.Stop, name)
+			}
+		}
+
+		// Signal process directly if it has a PID
+		pid := proc.Pid
+		if pid > 0 {
+			p, err := os.FindProcess(pid)
+			if err == nil {
+				p.Signal(syscall.SIGTERM)
+			}
+		}
+		proc.Status = bus.STOPPED
+	}
+
+	// Signal daemon to exit
+	if m.shutdownFunc != nil {
+		go m.shutdownFunc()
+	}
+
+	return nil
+}
+
 // handleQuery processes a ManagerQuery synchronously.
+// Inlines all query execution logic directly.
 func (m *Manager) handleQuery(query ManagerQuery) {
 	switch query.Type {
 	case "get":
-		info, err := m.getProcessInfoInternal(query.Name)
-		query.Resp <- QueryResult{Info: info, Err: err}
+		proc, exists := m.Process[query.Name]
+		if !exists {
+			query.Resp <- QueryResult{Err: fmt.Errorf("process not found: %s", query.Name)}
+			return
+		}
+
+		// Direct field access - event loop owns all state
+		info := protocol.ProcessInfo{
+			Name:    query.Name,
+			Status:  string(proc.Status),
+			Pid:     proc.Pid,
+			Uptime:  formatUptime(proc.LastStart),
+			Retries: proc.RetryCount,
+		}
+		query.Resp <- QueryResult{Info: info}
+
 	case "list":
-		infos, err := m.getAllProcessInfoInternal()
-		query.Resp <- QueryResult{Infos: infos, Err: err}
+		result := make([]protocol.ProcessInfo, 0, len(m.Process))
+		for name, proc := range m.Process {
+			// Direct field access - event loop owns all state
+			info := protocol.ProcessInfo{
+				Name:    name,
+				Status:  string(proc.Status),
+				Pid:     proc.Pid,
+				Uptime:  formatUptime(proc.LastStart),
+				Retries: proc.RetryCount,
+			}
+			result = append(result, info)
+		}
+		query.Resp <- QueryResult{Infos: result}
+
 	default:
 		query.Resp <- QueryResult{Err: fmt.Errorf("unknown query: %s", query.Type)}
 	}
@@ -228,7 +393,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 		return
 	}
 
-	var strategy engine.RetryStrategy
+	var strategy engine.RetryStrategyFunc
 	if proc != nil && proc.Strategy != nil {
 		strategy = proc.Strategy
 	} else {
@@ -237,7 +402,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 
 	// For autorestart=always, use unlimited retries. For others, use startretries.
 	var maxRetries int
-	if _, isAlwaysRestart := strategy.(*engine.AlwaysRestart); isAlwaysRestart {
+	if setting.Autorestart == "always" {
 		maxRetries = math.MaxInt // Restart indefinitely for autorestart=always
 	} else {
 		maxRetries = setting.Startretries
@@ -497,7 +662,7 @@ func closeChannel(ch chan struct{}) {
 }
 
 // ============================================================================
-// ManagerInterface Implementation
+// Public API
 // ============================================================================
 
 // GetProcessInfo returns info for a single process by name.
@@ -509,24 +674,6 @@ func (m *Manager) GetProcessInfo(name string) (protocol.ProcessInfo, error) {
 	return result.Info, result.Err
 }
 
-// getProcessInfoInternal is called by the event loop - no locking needed.
-func (m *Manager) getProcessInfoInternal(name string) (protocol.ProcessInfo, error) {
-	proc, exists := m.Process[name]
-	if !exists {
-		return protocol.ProcessInfo{}, fmt.Errorf("process not found: %s", name)
-	}
-
-	// Direct field access - event loop owns all state
-	info := protocol.ProcessInfo{
-		Name:    name,
-		Status:  string(proc.Status),
-		Pid:     proc.Pid,
-		Uptime:  formatUptime(proc.LastStart),
-		Retries: proc.RetryCount,
-	}
-	return info, nil
-}
-
 // GetAllProcessInfo returns info for all managed processes.
 // Sends a query to the event loop and waits for response.
 func (m *Manager) GetAllProcessInfo() ([]protocol.ProcessInfo, error) {
@@ -534,23 +681,6 @@ func (m *Manager) GetAllProcessInfo() ([]protocol.ProcessInfo, error) {
 	m.queryCh <- ManagerQuery{Type: "list", Resp: resp}
 	result := <-resp
 	return result.Infos, result.Err
-}
-
-// getAllProcessInfoInternal is called by the event loop - no locking needed.
-func (m *Manager) getAllProcessInfoInternal() ([]protocol.ProcessInfo, error) {
-	result := make([]protocol.ProcessInfo, 0, len(m.Process))
-	for name, proc := range m.Process {
-		// Direct field access - event loop owns all state
-		info := protocol.ProcessInfo{
-			Name:    name,
-			Status:  string(proc.Status),
-			Pid:     proc.Pid,
-			Uptime:  formatUptime(proc.LastStart),
-			Retries: proc.RetryCount,
-		}
-		result = append(result, info)
-	}
-	return result, nil
 }
 
 // formatUptime returns a human-readable uptime string.
@@ -580,43 +710,6 @@ func (m *Manager) Start(name string) error {
 	return <-resp
 }
 
-// startInternal is called by the event loop - no locking needed.
-func (m *Manager) startInternal(name string) error {
-	if m.ch == nil {
-		return fmt.Errorf("process channels not set")
-	}
-
-	configSpec, exists := m.Config[name]
-	if !exists {
-		return fmt.Errorf("process not found: %s", name)
-	}
-
-	// Check if watchdog is already running
-	if m.isRunning(name) {
-		return nil // Idempotent: already running is not an error
-	}
-
-	// Create stop channel if not exists
-	if _, ok := m.ch.Stop[name]; !ok {
-		m.ch.Stop[name] = make(chan struct{})
-	}
-
-	// Ensure ProcessInstance exists
-	if _, ok := m.Process[name]; !ok {
-		strategy := engine.RetryStrategyFactory(configSpec.Autorestart, configSpec.Exitcodes)
-		m.Process[name] = newProcessInstance(true, strategy)
-	}
-
-	// Set process as starting
-	m.Process[name].Status = bus.STARTING
-
-	// Spawn watchdog goroutine
-	go m.Watchdog(configSpec, m.Process[name])
-
-	slog.Info("RPC Start requested", "name", name)
-	return nil
-}
-
 // Stop stops a single process by name.
 // Sends a command to the event loop and waits for response.
 func (m *Manager) Stop(name string) error {
@@ -625,77 +718,12 @@ func (m *Manager) Stop(name string) error {
 	return <-resp
 }
 
-// stopInternal is called by the event loop - no locking needed.
-func (m *Manager) stopInternal(name string) error {
-	if m.ch == nil {
-		return fmt.Errorf("process channels not set")
-	}
-
-	_, exists := m.Config[name]
-	if !exists {
-		return fmt.Errorf("process not found: %s", name)
-	}
-
-	// Check if watchdog is running
-	stopChan, running := m.ch.Stop[name]
-	if !running {
-		return nil // Idempotent: not running is not an error
-	}
-
-	// Get the process instance for PID (may not exist if never started)
-	pid := 0
-	if proc, ok := m.Process[name]; ok {
-		pid = proc.Pid
-	}
-
-	// Signal watchdog to stop by closing the stop channel
-	closeChannel(stopChan)
-
-	// Also try to signal the process directly if we have a PID
-	if pid > 0 {
-		cfgSpec, ok := m.Config[name]
-		sig := os.Signal(syscall.SIGTERM) // Default
-		if ok && cfgSpec.Stopsignal != "" {
-			if s, err := engine.SignalFromString(cfgSpec.Stopsignal); err == nil {
-				sig = s
-			}
-		}
-		p, err := os.FindProcess(pid)
-		if err == nil {
-			p.Signal(sig)
-		}
-	}
-
-	// Remove from stops map and update status
-	delete(m.ch.Stop, name)
-	if proc, ok := m.Process[name]; ok {
-		proc.Status = bus.STOPPED
-	}
-
-	slog.Info("RPC Stop requested", "name", name)
-	return nil
-}
-
 // Restart restarts a single process by name.
 // Sends a command to the event loop and waits for response.
 func (m *Manager) Restart(name string) error {
 	resp := make(chan error, 1)
 	m.commandCh <- ManagerCommand{Type: "restart", Name: name, Resp: resp}
 	return <-resp
-}
-
-// restartInternal is called by the event loop - no locking needed.
-func (m *Manager) restartInternal(name string) error {
-	// Stop the process
-	if err := m.stopInternal(name); err != nil {
-		return err
-	}
-
-	// Brief wait to allow process cleanup
-	time.Sleep(100 * time.Millisecond)
-
-	// Start the process
-	return m.startInternal(name)
 }
 
 // ReloadResult contains the diff of configuration changes.
@@ -720,12 +748,11 @@ func (m *Manager) Reload() (*ReloadResult, error) {
 // For runtime reloads, use the Reload() method which sends a command to the event loop.
 func (m *Manager) ReloadFromConfig(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
 	// Note: No mutex needed - this is called during init before Run() or from event loop
-	return m.reloadFromConfigInternal(newConfig)
+	return m.applyConfigDiff(newConfig)
 }
 
-// reloadFromConfigInternal is the internal implementation - no locking needed.
-// Called by the event loop or during initialization.
-func (m *Manager) reloadFromConfigInternal(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
+// applyConfigDiff computes and applies the diff between current and new config.
+func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
 	if m.ch == nil {
 		return nil, fmt.Errorf("process channels not set")
 	}
@@ -798,31 +825,6 @@ func (m *Manager) reloadFromConfigInternal(newConfig map[string]*config.ConfigSp
 	return result, nil
 }
 
-// reloadInternal handles the reload command from the event loop.
-func (m *Manager) reloadInternal() (*ReloadResult, error) {
-	if m.configPath == "" {
-		return nil, fmt.Errorf("no config path stored, use NewManagerFromConfig() to initialize Manager")
-	}
-
-	// Load new config from disk
-	loader := &config.YAMLLoader{}
-	specs, err := loader.Load(m.configPath)
-	if err != nil {
-		return nil, fmt.Errorf("reload config: %w", err)
-	}
-
-	// Convert specs to config map
-	newConfig := make(map[string]*config.ConfigSpec)
-	for i := range specs {
-		spec := &specs[i]
-		newConfig[spec.ProcessName] = spec
-	}
-
-	// Apply the diff
-	result, err := m.reloadFromConfigInternal(newConfig)
-	return result, err
-}
-
 // configChanged returns true if two config specs are different.
 func configChanged(a, b *config.ConfigSpec) bool {
 	if a.Cmd != b.Cmd ||
@@ -862,35 +864,4 @@ func (m *Manager) Shutdown() error {
 	resp := make(chan error, 1)
 	m.commandCh <- ManagerCommand{Type: "shutdown", Resp: resp}
 	return <-resp
-}
-
-// shutdownInternal is called by the event loop - no locking needed.
-func (m *Manager) shutdownInternal() error {
-	// Signal all processes to stop, including those without active watchdogs
-	for name, proc := range m.Process {
-		// Stop watchdog if running
-		if m.ch != nil {
-			if stopChan, ok := m.ch.Stop[name]; ok {
-				closeChannel(stopChan)
-				delete(m.ch.Stop, name)
-			}
-		}
-
-		// Signal process directly if it has a PID
-		pid := proc.Pid
-		if pid > 0 {
-			p, err := os.FindProcess(pid)
-			if err == nil {
-				p.Signal(syscall.SIGTERM)
-			}
-		}
-		proc.Status = bus.STOPPED
-	}
-
-	// Signal daemon to exit
-	if m.shutdownFunc != nil {
-		go m.shutdownFunc()
-	}
-
-	return nil
 }

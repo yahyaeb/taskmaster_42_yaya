@@ -21,7 +21,7 @@ type RetryConfig struct {
 type ProcessWatcher struct {
 	Executor         ProcessExecutor
 	Config           RetryConfig
-	Strategy         RetryStrategy // optional, if nil uses config.ExpectedCodes
+	Strategy         RetryStrategyFunc // optional, if nil uses config.ExpectedCodes
 	OnProcessStarted func(pid int) // optional callback when a process starts
 	OnProcessRunning func(pid int) // optional callback when process completes starttime
 	OnBackoff        func(attempt int)
@@ -42,7 +42,7 @@ func NewProcessWatcher(executor ProcessExecutor, config RetryConfig) *ProcessWat
 }
 
 // NewProcessWatcherWithStrategy creates a new ProcessWatcher with explicit retry strategy.
-func NewProcessWatcherWithStrategy(executor ProcessExecutor, strategy RetryStrategy, maxRetries int, retryDelay time.Duration) *ProcessWatcher {
+func NewProcessWatcherWithStrategy(executor ProcessExecutor, strategy RetryStrategyFunc, maxRetries int, retryDelay time.Duration) *ProcessWatcher {
 	return &ProcessWatcher{
 		Executor: executor,
 		Config: RetryConfig{
@@ -202,7 +202,7 @@ func procState(pid int) (byte, error) {
 // shouldRestart determines if the process should be restarted based on exit code
 func (pw *ProcessWatcher) shouldRestart(exitCode ExitCode, attempt int) bool {
 	if pw.Strategy != nil {
-		return pw.Strategy.ShouldRestart(int(exitCode), attempt)
+		return pw.Strategy(int(exitCode), attempt)
 	}
 	// Legacy logic using ExpectedCodes
 	if pw.Config.ExpectedCodes != nil {

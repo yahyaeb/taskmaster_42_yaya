@@ -10,7 +10,7 @@ import (
 
 // ============================================================================
 // Fake Manager for Testing
-// A minimal implementation of ManagerInterface for testing handlers.
+// A minimal implementation of *Manager for testing handlers.
 // ============================================================================
 
 type fakeManager struct {

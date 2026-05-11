@@ -1,42 +1,34 @@
 package engine
 
-// RetryStrategy defines the interface for determining whether a process should be restarted.
-type RetryStrategy interface {
-	ShouldRestart(exitCode int, attempt int) bool
+// RetryStrategyFunc defines the decision logic for restarting a process.
+// Returns true if the process should be restarted given the exit code and retry attempt number.
+type RetryStrategyFunc func(exitCode int, attempt int) bool
+
+// AlwaysRestart strategy always restarts the process.
+func AlwaysRestart() RetryStrategyFunc {
+	return func(exitCode int, attempt int) bool {
+		return true
+	}
 }
 
-// AlwaysRestart is a strategy that always restarts the process.
-type AlwaysRestart struct{}
-
-// ShouldRestart always returns true.
-func (AlwaysRestart) ShouldRestart(exitCode int, attempt int) bool {
-	return true
-}
-
-// NeverRestart is a strategy that never restarts the process.
-type NeverRestart struct{}
-
-// ShouldRestart always returns false.
-func (NeverRestart) ShouldRestart(exitCode int, attempt int) bool {
-	return false
-}
-
-// UnexpectedOnlyRestart is a strategy that restarts only on unexpected exit codes.
-type UnexpectedOnlyRestart struct {
-	AllowedCodes []int
-}
-
-// ShouldRestart returns true only for unexpected exit codes (not 0 or in AllowedCodes).
-func (u UnexpectedOnlyRestart) ShouldRestart(exitCode int, attempt int) bool {
-	if exitCode == 0 {
+// NeverRestart strategy never restarts the process.
+func NeverRestart() RetryStrategyFunc {
+	return func(exitCode int, attempt int) bool {
 		return false
 	}
+}
 
-	for _, allowed := range u.AllowedCodes {
-		if exitCode == allowed {
+// UnexpectedOnlyRestart strategy restarts only on unexpected exit codes.
+func UnexpectedOnlyRestart(allowedCodes []int) RetryStrategyFunc {
+	return func(exitCode int, attempt int) bool {
+		if exitCode == 0 {
 			return false
 		}
+		for _, allowed := range allowedCodes {
+			if exitCode == allowed {
+				return false
+			}
+		}
+		return true
 	}
-
-	return true
 }

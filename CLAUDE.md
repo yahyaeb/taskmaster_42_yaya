@@ -1,4 +1,5 @@
-Always edit the project structure after each file edit / write.
+- Always edit the project structure after each file edit / write at CLAUDE.md.
+- Output one line before every tool call withe reason next step.
 
 Root:
   ├── main.go

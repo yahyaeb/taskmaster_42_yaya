@@ -8,7 +8,7 @@ import (
 	"taskmaster/internal/protocol"
 )
 
-func HandleConnection(conn net.Conn, manager ManagerInterface) {
+func HandleConnection(conn net.Conn, manager ProcessManager) {
 	defer conn.Close()
 
 	decoder := json.NewDecoder(conn)
@@ -25,7 +25,7 @@ func HandleConnection(conn net.Conn, manager ManagerInterface) {
 	_ = encoder.Encode(resp)
 }
 
-func RouteRequest(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {
+func RouteRequest(req *protocol.RPCRequest, manager ProcessManager) *protocol.RPCResponse {
 	if req.Method == "" {
 		return protocol.NewErrorResponse(protocol.InvalidRequest, "method is required", req.ID)
 	}
@@ -78,7 +78,7 @@ func getNameFromParams(params interface{}) (string, bool) {
 	return name, ok
 }
 
-func handleGetStatus(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {
+func handleGetStatus(req *protocol.RPCRequest, manager ProcessManager) *protocol.RPCResponse {
 	name, _ := getNameFromParams(req.Params)
 
 	if name == "" || name == "all" {
@@ -96,7 +96,7 @@ func handleGetStatus(req *protocol.RPCRequest, manager ManagerInterface) *protoc
 	return protocol.NewSuccessResponse(info, req.ID)
 }
 
-func handleStart(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {
+func handleStart(req *protocol.RPCRequest, manager ProcessManager) *protocol.RPCResponse {
 	name, hasName := getNameFromParams(req.Params)
 
 	if !hasName || name == "" {
@@ -117,7 +117,7 @@ func handleStart(req *protocol.RPCRequest, manager ManagerInterface) *protocol.R
 	return protocol.NewSuccessResponse(protocol.ActionResponse{Success: true, Message: "process starting"}, req.ID)
 }
 
-func handleStop(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {
+func handleStop(req *protocol.RPCRequest, manager ProcessManager) *protocol.RPCResponse {
 	name, hasName := getNameFromParams(req.Params)
 
 	if !hasName || name == "" {
@@ -138,7 +138,7 @@ func handleStop(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RP
 	return protocol.NewSuccessResponse(protocol.ActionResponse{Success: true, Message: "process stopping"}, req.ID)
 }
 
-func handleRestart(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {
+func handleRestart(req *protocol.RPCRequest, manager ProcessManager) *protocol.RPCResponse {
 	name, hasName := getNameFromParams(req.Params)
 
 	if !hasName || name == "" {
@@ -159,7 +159,7 @@ func handleRestart(req *protocol.RPCRequest, manager ManagerInterface) *protocol
 	return protocol.NewSuccessResponse(protocol.ActionResponse{Success: true, Message: "process restarting"}, req.ID)
 }
 
-func handleReload(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {
+func handleReload(req *protocol.RPCRequest, manager ProcessManager) *protocol.RPCResponse {
 	name, hasName := getNameFromParams(req.Params)
 
 	if hasName && name != "" {
@@ -177,7 +177,7 @@ func handleReload(req *protocol.RPCRequest, manager ManagerInterface) *protocol.
 	}, req.ID)
 }
 
-func handleShutdown(req *protocol.RPCRequest, manager ManagerInterface) *protocol.RPCResponse {
+func handleShutdown(req *protocol.RPCRequest, manager ProcessManager) *protocol.RPCResponse {
 	name, hasName := getNameFromParams(req.Params)
 
 	if hasName && name != "" {
