@@ -8,6 +8,49 @@ import (
 	"taskmaster/internal/protocol"
 )
 
+// HandlerFunc is the signature for RPC method handlers.
+type HandlerFunc func(*Manager, map[string]any) (any, error)
+
+// handlerRegistry maps method names to their handlers and validation rules.
+type handlerInfo struct {
+	fn        HandlerFunc
+	needsName bool       // if true, requires "name" parameter
+	allowAll  bool       // if true, allows "all" as name
+}
+
+var handlers = map[string]handlerInfo{
+	"GetStatus": {
+		fn:        handleGetStatus,
+		needsName: false,
+		allowAll:  true,
+	},
+	"Start": {
+		fn:        handleStart,
+		needsName: true,
+		allowAll:  false,
+	},
+	"Stop": {
+		fn:        handleStop,
+		needsName: true,
+		allowAll:  false,
+	},
+	"Restart": {
+		fn:        handleRestart,
+		needsName: true,
+		allowAll:  false,
+	},
+	"Reload": {
+		fn:        handleReload,
+		needsName: false,
+		allowAll:  false,
+	},
+	"Shutdown": {
+		fn:        handleShutdown,
+		needsName: false,
+		allowAll:  false,
+	},
+}
+
 func HandleConnection(conn net.Conn, manager *Manager) {
 	defer conn.Close()
 
@@ -36,24 +79,41 @@ func RouteRequest(req *protocol.RPCRequest, manager *Manager) *protocol.RPCRespo
 	}
 
 	action := parts[1]
+	info, ok := handlers[action]
+	if !ok {
+		return protocol.NewErrorResponse(protocol.MethodNotFound, "method not found", req.ID)
+	}
 
 	return withRecovery(func() *protocol.RPCResponse {
-		switch action {
-		case "GetStatus":
-			return handleGetStatus(req, manager)
-		case "Start":
-			return handleStart(req, manager)
-		case "Stop":
-			return handleStop(req, manager)
-		case "Restart":
-			return handleRestart(req, manager)
-		case "Reload":
-			return handleReload(req, manager)
-		case "Shutdown":
-			return handleShutdown(req, manager)
-		default:
-			return protocol.NewErrorResponse(protocol.MethodNotFound, "method not found", req.ID)
+		params, _ := req.Params.(map[string]any)
+		name, _ := params["name"].(string)
+
+		// Validate parameters
+		if info.needsName {
+			if name == "" {
+				return protocol.NewErrorResponse(protocol.InvalidParams, "name is required", req.ID)
+			}
+			if !info.allowAll && name == "all" {
+				return protocol.NewErrorResponse(protocol.InvalidParams, "cannot use 'all' with "+action, req.ID)
+			}
+		} else if name != "" && !info.allowAll {
+			return protocol.NewErrorResponse(protocol.InvalidParams, action+" does not accept a name", req.ID)
 		}
+
+		// Pre-check for process existence when name is provided
+		if name != "" && name != "all" && action != "GetStatus" {
+			if _, err := manager.GetProcessInfo(name); err != nil {
+				return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
+			}
+		}
+
+		// Execute handler
+		result, err := info.fn(manager, params)
+		if err != nil {
+			return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
+		}
+
+		return protocol.NewSuccessResponse(result, req.ID)
 	}, req.ID)
 }
 
@@ -66,126 +126,55 @@ func withRecovery(fn func() *protocol.RPCResponse, id int) (resp *protocol.RPCRe
 	return fn()
 }
 
-func getNameFromParams(params interface{}) (string, bool) {
-	if params == nil {
-		return "", false
-	}
-	m, ok := params.(map[string]interface{})
-	if !ok {
-		return "", false
-	}
-	name, ok := m["name"].(string)
-	return name, ok
-}
+// Handler implementations
 
-func handleGetStatus(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
-	name, _ := getNameFromParams(req.Params)
-
+func handleGetStatus(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
 	if name == "" || name == "all" {
-		infos, err := manager.GetAllProcessInfo()
-		if err != nil {
-			return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
-		}
-		return protocol.NewSuccessResponse(infos, req.ID)
+		return m.GetAllProcessInfo()
 	}
+	return m.GetProcessInfo(name)
+}
 
-	info, err := manager.GetProcessInfo(name)
+func handleStart(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	if err := m.Start(name); err != nil {
+		return nil, err
+	}
+	return protocol.ActionResponse{Success: true, Message: "process starting"}, nil
+}
+
+func handleStop(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	if err := m.Stop(name); err != nil {
+		return nil, err
+	}
+	return protocol.ActionResponse{Success: true, Message: "process stopping"}, nil
+}
+
+func handleRestart(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	if err := m.Restart(name); err != nil {
+		return nil, err
+	}
+	return protocol.ActionResponse{Success: true, Message: "process restarting"}, nil
+}
+
+func handleReload(m *Manager, params map[string]any) (any, error) {
+	result, err := m.Reload()
 	if err != nil {
-		return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
+		return nil, err
 	}
-	return protocol.NewSuccessResponse(info, req.ID)
-}
-
-func handleStart(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
-	name, hasName := getNameFromParams(req.Params)
-
-	if !hasName || name == "" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "name is required", req.ID)
-	}
-	if name == "all" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "cannot use 'all' with Start", req.ID)
-	}
-
-	// Pre-check to return ProcessNotFound (not OperationFailed) for missing process.
-	if _, err := manager.GetProcessInfo(name); err != nil {
-		return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
-	}
-
-	if err := manager.Start(name); err != nil {
-		return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
-	}
-	return protocol.NewSuccessResponse(protocol.ActionResponse{Success: true, Message: "process starting"}, req.ID)
-}
-
-func handleStop(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
-	name, hasName := getNameFromParams(req.Params)
-
-	if !hasName || name == "" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "name is required", req.ID)
-	}
-	if name == "all" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "cannot use 'all' with Stop", req.ID)
-	}
-
-	// Pre-check to return ProcessNotFound (not OperationFailed) for missing process.
-	if _, err := manager.GetProcessInfo(name); err != nil {
-		return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
-	}
-
-	if err := manager.Stop(name); err != nil {
-		return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
-	}
-	return protocol.NewSuccessResponse(protocol.ActionResponse{Success: true, Message: "process stopping"}, req.ID)
-}
-
-func handleRestart(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
-	name, hasName := getNameFromParams(req.Params)
-
-	if !hasName || name == "" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "name is required", req.ID)
-	}
-	if name == "all" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "cannot use 'all' with Restart", req.ID)
-	}
-
-	// Pre-check to return ProcessNotFound (not OperationFailed) for missing process.
-	if _, err := manager.GetProcessInfo(name); err != nil {
-		return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
-	}
-
-	if err := manager.Restart(name); err != nil {
-		return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
-	}
-	return protocol.NewSuccessResponse(protocol.ActionResponse{Success: true, Message: "process restarting"}, req.ID)
-}
-
-func handleReload(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
-	name, hasName := getNameFromParams(req.Params)
-
-	if hasName && name != "" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "Reload does not accept a name", req.ID)
-	}
-
-	result, err := manager.Reload()
-	if err != nil {
-		return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
-	}
-	return protocol.NewSuccessResponse(protocol.ReloadResponse{
+	return protocol.ReloadResponse{
 		Added:     result.Added,
 		Removed:   result.Removed,
 		Restarted: result.Restarted,
-	}, req.ID)
+	}, nil
 }
 
-func handleShutdown(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
-	name, hasName := getNameFromParams(req.Params)
-
-	if hasName && name != "" {
-		return protocol.NewErrorResponse(protocol.InvalidParams, "Shutdown does not accept a name", req.ID)
+func handleShutdown(m *Manager, params map[string]any) (any, error) {
+	if err := m.Shutdown(); err != nil {
+		return nil, err
 	}
-
-	if err := manager.Shutdown(); err != nil {
-		return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
-	}
-	return protocol.NewSuccessResponse(protocol.ActionResponse{Success: true, Message: "Daemon shutting down..."}, req.ID)
+	return protocol.ActionResponse{Success: true, Message: "Daemon shutting down..."}, nil
 }
