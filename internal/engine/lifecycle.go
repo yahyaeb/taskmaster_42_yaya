@@ -12,13 +12,6 @@ import (
 	"taskmaster/internal/config"
 )
 
-type RetryConfig struct {
-	MaxRetries  int
-	RetryDelay  time.Duration
-	ExitCodes   []int
-	AutoRestart string
-}
-
 func ShouldRestart(autorestart string, exitCode int, exitcodes []int) bool {
 	switch autorestart {
 	case "always":

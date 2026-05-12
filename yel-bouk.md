@@ -42,3 +42,80 @@ Kill supervised process → verifies auto-restart works.
 Supervise failing process → verifies abort after max retries.
 SIGHUP triggers hot-reload without affecting unchanged processes.
 All 13 config options from evaluation guide tested and working.
+
+---
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         USER LAYER                               │
+│  ┌──────────────┐          ┌──────────────┐                    │
+│  │  taskmasterctl │          │   SIGHUP     │                    │
+│  │  (cmd/ctl/)    │          │   signal     │                    │
+│  └───────┬────────┘          └──────┬───────┘                    │
+└──────────┼──────────────────────────┼────────────────────────────┘
+           │                          │
+           │   Unix Socket            │
+           │   /tmp/taskmaster.sock   │
+           ▼                          ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      DAEMON LAYER (cmd/daemon/)                 │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  SocketListener  (internal/app/rpc.go)               │    │
+│  │  - Accepts RPC connections                              │    │
+│  │  - Routes to Manager                                   │    │
+│  └─────────────────────┬───────────────────────────────────┘    │
+│                        │                                        │
+│                        ▼                                        │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │  Manager  (internal/app/core.go)                        │    │
+│  │  - sync.Mutex protects all state                        │    │
+│  │  - Holds: Config[process] → ProcessInstance             │    │
+│  │  - Methods: Start/Stop/Restart/Reload/Shutdown          │    │
+│  └─────────────────────┬───────────────────────────────────┘    │
+│                        │                                        │
+│           ┌────────────┼────────────┐                        │
+│           │            │            │                         │
+│           ▼            ▼            ▼                         │
+│  ┌──────────────┐ ┌──────────┐ ┌──────────────┐               │
+│  │   Watchdog   │ │  Reload  │ │   Status     │               │
+│  │   (per proc) │ │  (SIGHUP)│ │   Channel    │               │
+│  └──────────────┘ └──────────┘ └──────────────┘               │
+│           │                                        │            │
+│           ▼                                        ▼            │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │           ENGINE LAYER (internal/engine/)               │    │
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │    │
+│  │  │ process.go   │  │  signal.go   │  │ lifecycle.go │    │    │
+│  │  │ - Executor   │  │ - Signal     │  │ - Watcher    │    │    │
+│  │  │ - Command    │  │ - Stopper    │  │ - ShouldRestart│   │    │
+│  │  └──────────────┘  └──────────────┘  └──────────────┘    │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+DATA FLOW
+=========
+1. User runs "taskmasterctl start nginx"
+   → RPC Request → SocketListener → Manager.Start("nginx")
+
+2. Manager spawns Watchdog goroutine
+   → Watchdog creates process via engine/process.go
+   → Sends status updates via Status channel
+
+3. Logger (to be implement) reads Status channel
+   → Writes to /var/log/taskmaster/taskmaster.log
+
+DIRECTORY GUIDE
+===============
+cmd/daemon/         → Daemon entry point (main loop, SIGHUP handler)
+cmd/ctl/            → Control program (your readline shell goes here)
+internal/app/       → Core orchestration (Manager + RPC handlers)
+internal/engine/    → Process execution primitives
+internal/bus/       → Event types (ProcessUpdate, Status enum)
+internal/config/    → YAML loading + config spec
+e2e/                → End-to-end tests (run these!)
+config.yml          → Example configuration
+```
