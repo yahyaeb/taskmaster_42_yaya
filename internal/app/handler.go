@@ -14,8 +14,8 @@ type HandlerFunc func(*Manager, map[string]any) (any, error)
 // handlerRegistry maps method names to their handlers and validation rules.
 type handlerInfo struct {
 	fn        HandlerFunc
-	needsName bool       // if true, requires "name" parameter
-	allowAll  bool       // if true, allows "all" as name
+	needsName bool // if true, requires "name" parameter
+	allowAll  bool // if true, allows "all" as name
 }
 
 var handlers = map[string]handlerInfo{

@@ -114,28 +114,27 @@ Root:
   │       │   ├── type ProcessManager (interface)
   │       │   ├── type ProcessInstance
   │       │   ├── type Manager
+  │       │   │   ├── mu sync.Mutex (protects all state)
+  │       │   │   ├── Config map[string]*config.ConfigSpec
+  │       │   │   └── Process map[string]*ProcessInstance
   │       │   ├── func NewManager
-  │       │   ├── func (m *Manager) EventLoop (owns all state)
-  │       │   ├── func (m *Manager) handleCommand (inlined: doStart, doStop, doRestart, doReload, doShutdown)
-  │       │   ├── func (m *Manager) handleQuery (inlined: get, list)
-  │       │   ├── func (m *Manager) handleStatusUpdate
-  │       │   ├── func (m *Manager) Watchdog
-  │       │   ├── func (m *Manager) GetProcessInfo
-  │       │   ├── func (m *Manager) GetAllProcessInfo
-  │       │   ├── func (m *Manager) Start
-  │       │   ├── func (m *Manager) Stop
-  │       │   ├── func (m *Manager) Restart
-  │       │   ├── func (m *Manager) Reload
-  │       │   ├── func (m *Manager) Shutdown
-  │       │   ├── type ReloadResult
+  │       │   ├── func (m *Manager) Start (mutex-protected)
+  │       │   ├── func (m *Manager) Stop (mutex-protected)
+  │       │   ├── func (m *Manager) Restart (mutex-protected)
+  │       │   ├── func (m *Manager) Reload (mutex-protected)
+  │       │   ├── func (m *Manager) Shutdown (mutex-protected)
+  │       │   ├── func (m *Manager) GetProcessInfo (mutex-protected)
+  │       │   ├── func (m *Manager) GetAllProcessInfo (mutex-protected)
+  │       │   ├── func (m *Manager) Watchdog (runs in goroutine per process)
+  │       │   ├── func (m *Manager) applyConfigDiff
   │       │   └── helper functions (formatUptime, closeChannel, etc.)
   │       ├── channels.go
   │       │   ├── type ProcessChannels
+  │       │   │   ├── Status chan bus.ProcessUpdate (Watchdog → Manager)
+  │       │   │   └── Stop map[string]chan struct{} (Manager → Watchdog)
   │       │   ├── func NewProcessChannels
-  │       │   ├── type ManagerCommand
-  │       │   ├── type ManagerQuery
-  │       │   ├── type QueryResult
-  │       │   └── type ReloadCommandResult
+  │       │   ├── type ReloadResult
+  │       │   └── type ProcessManager (interface)
   │       ├── listener.go
   │       │   ├── type SocketListener
   │       │   ├── func NewSocketListener(path, manager ProcessManager)
@@ -190,63 +189,56 @@ Root:
 - AlwaysRestart, NeverRestart, UnexpectedOnlyRestart: types → factory functions
 - Cleaner factory pattern, reduced type count
 
-### Phases Skipped
-- Phase 2: Callbacks already simple, refactoring adds complexity
-- Phase 3: Stop map works fine, context tracking adds complexity
+### Phase 5 ✓: Remove Channel Dispatch (SIMPLIFICATION)
+- Replaced reqCh + EventLoop dispatch with sync.Mutex
+- Removed Request/Response types from channels.go
+- Public methods now directly acquire mutex and execute
+- Removed ~60 lines of indirection code
+- Student-friendly: trace `Start()` → lock → logic → unlock → return
 
 ### Impact
-- Removed ~36 lines of code (type definitions, methods)
-- No behavior changes - all 36 e2e tests passing
-- Clearer ownership model: EventLoop owns all state
+- Removed ~100+ lines of code (types, channel plumbing, EventLoop)
+- No behavior changes - all e2e tests passing
+- Clearer ownership model: mutex protects all state
 - Simpler type hierarchy
+- Direct method calls instead of string-based dispatch
 
 ---
 
-## ARCHITECTURE (Updated)
+## ARCHITECTURE (Simplified - No Channel Dispatch)
 
-### Command Flow
+### Command Flow (Direct)
 ```
 RPC Request → Handler.RouteRequest(ProcessManager)
             ↓
           Manager.{Start|Stop|Restart|Reload|Shutdown}
             ↓
-          Send ManagerCommand to commandCh
+          mu.Lock() → direct state mutation → mu.Unlock()
             ↓
-          EventLoop receives → handleCommand
-            ↓
-          doStart/doStop/doRestart/doReload/doShutdown
-            ↓
-          Direct state mutation or Watchdog spawn
-            ↓
-          Status updates via Status channel
-            ↓
-          handleStatusUpdate applies changes
-```
-
-### Query Flow
-```
-RPC Request → Handler.RouteRequest(ProcessManager)
-           ↓
-         Manager.GetProcessInfo/GetAllProcessInfo
-           ↓
-         Send ManagerQuery to queryCh
-           ↓
-         EventLoop receives → drainStatus() → handleQuery
-           ↓
-         Direct Process map read (no methods needed)
-           ↓
-         Send QueryResult
+          Return result directly (no channels)
 ```
 
 ### Watchdog Lifecycle
 ```
-EventLoop spawns Watchdog(ConfigSpec, ProcessInstance)
+Manager.Start() spawns Watchdog(ConfigSpec, ProcessInstance)
            ↓
 Watchdog creates ProcessWatcher with RetryStrategyFunc
            ↓
-watcher.Run() with callbacks (unchanged from Phase 1)
+watcher.Run() with callbacks
            ↓
-Callbacks send ProcessUpdate to Status channel
+Callbacks send ProcessUpdate to Status channel (async)
            ↓
-EventLoop.handleStatusUpdate applies to Process state
+Manager.handleStatusUpdate applies to Process state
+           ↓
+(mu.Lock() for mutation, mu.Unlock())
 ```
+
+### Key Design Change
+**Before:** String dispatch via channel → EventLoop switch → handler
+**After:** Direct method call → mutex.Lock() → logic → mutex.Unlock()
+
+Benefits:
+- No "magic strings" for command routing
+- Stack traces show actual method names
+- Standard Go concurrency pattern (mutex)
+- Easier to debug (no hidden goroutine for dispatch)

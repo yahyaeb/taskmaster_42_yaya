@@ -6,32 +6,24 @@ import (
 	"taskmaster/internal/protocol"
 )
 
+// ProcessChannels holds the channels used for process supervision.
+// These are the ONLY channels needed - no command dispatch channel required.
 type ProcessChannels struct {
-	// Watchdog → Manager (and eventually to main/socket)
+	// Status receives updates from Watchdogs (Watchdog → Manager)
+	// Buffered to prevent slow status handling from blocking watchdogs
 	Status chan bus.ProcessUpdate
 
-	// Manager → Watchdog (stop signal per process)
+	// Stop signals a Watchdog to stop its process (Manager → Watchdog)
+	// Each process has its own stop channel
 	Stop map[string]chan struct{}
 }
 
+// NewProcessChannels creates a new set of process communication channels.
 func NewProcessChannels() *ProcessChannels {
 	return &ProcessChannels{
-		Status: make(chan bus.ProcessUpdate, 100), // buffered!
+		Status: make(chan bus.ProcessUpdate, 100),
 		Stop:   make(map[string]chan struct{}),
 	}
-}
-
-// Request is a unified request type for all Manager operations.
-type Request struct {
-	Type string // "start", "stop", "restart", "reload", "shutdown", "get", "list"
-	Name string // process name (for single-target ops)
-	Resp chan Response
-}
-
-// Response is the unified response type for all Manager operations.
-type Response struct {
-	Result interface{} // *ReloadResult, []protocol.ProcessInfo, protocol.ProcessInfo, or nil
-	Err    error
 }
 
 // ReloadResult contains the outcome of a configuration reload.
@@ -42,6 +34,7 @@ type ReloadResult struct {
 }
 
 // ProcessManager defines the interface for process management operations.
+// This is the clean API surface - all methods are synchronous and safe for concurrent use.
 type ProcessManager interface {
 	GetProcessInfo(name string) (protocol.ProcessInfo, error)
 	GetAllProcessInfo() ([]protocol.ProcessInfo, error)
@@ -51,3 +44,6 @@ type ProcessManager interface {
 	Reload() (*ReloadResult, error)
 	Shutdown() error
 }
+
+// Compile-time check: Manager must implement ProcessManager
+var _ ProcessManager = (*Manager)(nil)
