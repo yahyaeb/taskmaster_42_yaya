@@ -4,32 +4,23 @@ import (
 	"taskmaster/internal/engine"
 )
 
-// Re-export engine types for backward compatibility with existing tests.
+// Re-export engine types for backward compatibility.
 type (
-	ProcessExecutor             = engine.ProcessExecutor
-	Process                     = engine.Process
-	ExitCode                    = engine.ExitCode
-	RetryStrategy               = engine.RetryStrategy
-	RetryConfig                 = engine.RetryConfig
-	ProcessWatcher              = engine.ProcessWatcher
-	ProcessSpawner              = engine.ProcessSpawner
-	AlwaysRestart               = engine.AlwaysRestart
-	NeverRestart                = engine.NeverRestart
-	UnexpectedOnlyRestart       = engine.UnexpectedOnlyRestart
-	SignalHandler               = engine.SignalHandler
-	OSSignalHandler             = engine.OSSignalHandler
-	ProcessStopper              = engine.ProcessStopper
+	ProcessExecutor       = engine.ProcessExecutor
+	Process               = engine.Process
+	ExitCode              = engine.ExitCode
+	RetryConfig           = engine.RetryConfig
+	ProcessWatcher        = engine.ProcessWatcher
+	ProcessSpawner        = engine.ProcessSpawner
+	SignalHandler         = engine.SignalHandler
+	OSSignalHandler       = engine.OSSignalHandler
+	ProcessStopper        = engine.ProcessStopper
 )
 
-// Re-export constructor functions
+// Re-export functions
 var (
-	NewOsProcessExecutor          = engine.NewOsProcessExecutor
-	NewProcessWatcher             = engine.NewProcessWatcher
-	NewProcessWatcherWithStrategy = engine.NewProcessWatcherWithStrategy
-	NewProcessStopper             = engine.NewProcessStopper
-	RetryStrategyFactory          = engine.RetryStrategyFactory
-	RetryStrategyFromExpectedCodes = engine.RetryStrategyFromExpectedCodes
+	NewOsProcessExecutor  = engine.NewOsProcessExecutor
+	NewProcessWatcher     = engine.NewProcessWatcher
+	NewProcessStopper     = engine.NewProcessStopper
+	ShouldRestart         = engine.ShouldRestart
 )
-
-// For testing - re-export internal builder type
-type commandBuilder = engine.CommandBuilder

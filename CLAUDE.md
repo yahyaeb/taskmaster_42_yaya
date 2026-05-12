@@ -1,5 +1,4 @@
-- Always edit the project structure after each file edit / write at CLAUDE.md.
-- Output one line before every tool call withe reason next step.
+Always edit the project structure after each file edit / write.
 
 Root:
   ├── main.go
@@ -40,13 +39,10 @@ Root:
   │   │   │   ├── func NewProcessStopper
   │   │   │   └── func (ps *ProcessStopper) Stop
   │   │   ├── retry.go
-  │   │   │   ├── type RetryStrategy
-  │   │   │   ├── type AlwaysRestart
-  │   │   │   ├── func (AlwaysRestart) ShouldRestart
-  │   │   │   ├── type NeverRestart
-  │   │   │   ├── func (NeverRestart) ShouldRestart
-  │   │   │   ├── type UnexpectedOnlyRestart
-  │   │   │   └── func (u UnexpectedOnlyRestart) ShouldRestart
+  │   │   │   ├── type RetryStrategyFunc (function type)
+  │   │   │   ├── func AlwaysRestart() RetryStrategyFunc
+  │   │   │   ├── func NeverRestart() RetryStrategyFunc
+  │   │   │   └── func UnexpectedOnlyRestart(allowedCodes) RetryStrategyFunc
   │   │   ├── retry_factory.go
   │   │   │   ├── func RetryStrategyFactory
   │   │   │   └── func RetryStrategyFromExpectedCodes
@@ -104,8 +100,8 @@ Root:
   │   │       └── func NewSuccessResponse
   │   └── app/
   │       ├── handler.go
-  │       │   ├── func HandleConnection
-  │       │   ├── func RouteRequest
+  │       │   ├── func HandleConnection(conn, manager ProcessManager)
+  │       │   ├── func RouteRequest(req, manager ProcessManager)
   │       │   ├── func withRecovery
   │       │   ├── func getNameFromParams
   │       │   ├── func handleGetStatus
@@ -115,44 +111,49 @@ Root:
   │       │   ├── func handleReload
   │       │   └── func handleShutdown
   │       ├── manager.go
+  │       │   ├── type ProcessManager (interface)
   │       │   ├── type ProcessInstance
-  │       │   ├── func (pi *ProcessInstance) GetStatus
-  │       │   ├── func (pi *ProcessInstance) SetStatus
-  │       │   ├── func (pi *ProcessInstance) GetPid
-  │       │   ├── func (pi *ProcessInstance) SetPid
-  │       │   ├── func (pi *ProcessInstance) SetStateOnStart
-  │       │   ├── func (pi *ProcessInstance) SetStateOnRunning
-  │       │   ├── func (pi *ProcessInstance) SetStateOnBackoff
-  │       │   ├── func (pi *ProcessInstance) State
   │       │   ├── type Manager
   │       │   ├── func NewManager
+  │       │   ├── func (m *Manager) EventLoop (owns all state)
+  │       │   ├── func (m *Manager) handleCommand (inlined: doStart, doStop, doRestart, doReload, doShutdown)
+  │       │   ├── func (m *Manager) handleQuery (inlined: get, list)
+  │       │   ├── func (m *Manager) handleStatusUpdate
   │       │   ├── func (m *Manager) Watchdog
-  │       │   ├── func sendFinalUpdate
-  │       │   ├── func Stop
-  │       │   ├── func Spawn
-  │       │   ├── func Load
-  │       │   └── func closeChannel
+  │       │   ├── func (m *Manager) GetProcessInfo
+  │       │   ├── func (m *Manager) GetAllProcessInfo
+  │       │   ├── func (m *Manager) Start
+  │       │   ├── func (m *Manager) Stop
+  │       │   ├── func (m *Manager) Restart
+  │       │   ├── func (m *Manager) Reload
+  │       │   ├── func (m *Manager) Shutdown
+  │       │   ├── type ReloadResult
+  │       │   └── helper functions (formatUptime, closeChannel, etc.)
   │       ├── channels.go
   │       │   ├── type ProcessChannels
   │       │   ├── func NewProcessChannels
-  │       │   ├── type Command
-  │       │   ├── type ReloadCommandResult
   │       │   ├── type ManagerCommand
   │       │   ├── type ManagerQuery
-  │       │   └── type QueryResult
+  │       │   ├── type QueryResult
+  │       │   └── type ReloadCommandResult
   │       ├── listener.go
   │       │   ├── type SocketListener
-  │       │   ├── func NewSocketListener
-  │       │   ├── func (sl *SocketListener) serve
+  │       │   ├── func NewSocketListener(path, manager ProcessManager)
+  │       │   ├── func (sl *SocketListener) serve(m ProcessManager)
   │       │   ├── func (sl *SocketListener) Stop
   │       │   ├── func (sl *SocketListener) Addr
-  │       │   └── func StartSocketListener
+  │       │   └── func StartSocketListener(path, manager ProcessManager)
   │       └── *_test.go
   ├── cmd/
   │   ├── daemon/
   │   │   └── main.go
-  │   │       ├── func read
-  │   │       └── func main
+  │   │       ├── type ManagerReference (atomic swap wrapper)
+  │   │       ├── func NewManagerReference
+  │   │       ├── func (mr *ManagerReference) GetManager
+  │   │       ├── func (mr *ManagerReference) SetManager
+  │   │       ├── func (mr *ManagerReference) [Implements ProcessManager methods]
+  │   │       ├── func main
+  │   │       └── SIGHUP handling for config reload
   │   └── ctl/
   │       └── main.go
   │           ├── func main
@@ -175,149 +176,77 @@ Root:
 
 ---
 
-## ARCHITECTURE & DEPENDENCY MAP
+## REFACTORING COMPLETE
 
-### Layer 1: Entry Points (cmd/)
-```
-daemon/main      ─────┐
-ctl/main         ─────┼─ internal/app/Manager (orchestrator)
-                      │   └─ via: channels.go (command queue)
-                      │   └─ via: listener.go (socket RPC)
-                      └─ Handler.RouteRequest()
-```
+### Phase 1 ✓: Flatten Manager
+- Removed double-method pattern (Start → startInternal)
+- All *Internal methods inlined into handleCommand/handleQuery
+- Removed ProcessQuerier, ProcessController, DaemonController interfaces
+- Single ProcessManager interface for RPC boundary
+- EventLoop directly owns and modifies state
 
-### Layer 2: Core App (internal/app/)
-**Contracts & Orchestration**
-```
-ProcessChannels
-  ├─ type Command (structs for manager actions)
-  ├─ type ManagerCommand (command dispatch)
-  ├─ type ManagerQuery (query dispatch)
-  └─ used by: Manager.Watchdog()
+### Phase 4 ✓: Function-based retry strategies
+- RetryStrategy interface → RetryStrategyFunc (function type)
+- AlwaysRestart, NeverRestart, UnexpectedOnlyRestart: types → factory functions
+- Cleaner factory pattern, reduced type count
 
-SocketListener
-  ├─ NewSocketListener(path, Manager)
-  ├─ serve() → Handler.HandleConnection()
-  └─ used by: cmd/daemon/main
+### Phases Skipped
+- Phase 2: Callbacks already simple, refactoring adds complexity
+- Phase 3: Stop map works fine, context tracking adds complexity
 
-Handler (RPC dispatcher)
-  ├─ RouteRequest(RPCRequest) → RPCResponse
-  ├─ handleGetStatus() ─→ Manager.GetStatus()
-  ├─ handleStart() ─────→ Manager.Spawn()
-  ├─ handleStop() ──────→ Manager.Stop()
-  ├─ handleRestart() ───→ Manager.Spawn() + Manager.Stop()
-  ├─ handleReload() ────→ Manager.Load() + refresh channels
-  └─ handleShutdown() ──→ Manager.Stop() (all) + exit
-
-Manager (process orchestrator)
-  ├─ Load(config) → create ProcessInstance per process
-  ├─ Spawn(name) → call Watcher.Run()
-  ├─ Stop(name) → call ProcessStopper.Stop()
-  ├─ Watchdog() → listen on channels, dispatch commands
-  └─ GetStatus() → collect state from all instances
-```
-
-### Layer 3: Engine (process lifecycle) — internal/engine/
-**Interfaces (contracts) & Implementations**
-
-```
-[ProcessExecutor] (interface: Start, Wait, Signal)
-  └─ OsProcessExecutor (impl)
-     ├─ Start(cmd, cwd, env, umask) → spawn OS process
-     ├─ Wait() → block until process exits
-     ├─ Signal(sig) → send signal to process
-     └─ used by: ProcessWatcher.Run()
-
-[RetryStrategy] (interface: ShouldRestart)
-  ├─ AlwaysRestart (impl)
-  ├─ NeverRestart (impl)
-  └─ UnexpectedOnlyRestart (impl)
-     └─ used by: ProcessWatcher.Run()
-     └─ created by: RetryStrategyFactory(config.AutoRestart, config.ExitCodes)
-
-[SignalHandler] (interface: Send)
-  └─ OSSignalHandler (impl)
-     └─ used by: ProcessStopper.Stop()
-
-ProcessWatcher (high-level process supervisor)
-  ├─ Run(executor, strategy, callbacks)
-  ├─ spawns process via: ProcessExecutor.Start()
-  ├─ decides restart via: RetryStrategy.ShouldRestart()
-  ├─ fires callbacks: OnProcessStarted, OnProcessRunning, OnBackoff, OnSpawnFailed
-  └─ used by: Manager.Spawn() → calls watcher.Run() in goroutine
-
-ProcessStopper (graceful shutdown)
-  ├─ Stop(pid, signal, stopTime)
-  ├─ sends signal via: SignalHandler.Send()
-  ├─ kills if timeout via: SignalHandler.Send(SIGKILL)
-  └─ used by: Manager.Stop()
-
-CommandBuilder (command assembly)
-  ├─ BuildCommand(program, args) → *os.Cmd
-  └─ used by: OsProcessExecutor.Start()
-```
-
-### Layer 4: Support (configuration, events, protocol) — internal/
-**Factories, Config, Events**
-
-```
-RetryStrategyFactory
-  ├─ RetryStrategyFactory(autoRestart string) → RetryStrategy
-  ├─ RetryStrategyFromExpectedCodes(exitCodes) → RetryStrategy
-  └─ used by: Manager.Load() (per process config)
-
-ConfigSpec + YAMLLoader
-  ├─ ConfigSpec.Validate() → errors
-  ├─ YAMLLoader.Load(file) → ConfigFile → []ConfigSpec
-  └─ used by: Manager.Load()
-
-ProcessUpdate (event bus)
-  ├─ type Status (starting, running, backoff, fatal, stopped)
-  ├─ type ProcessUpdate (name, status, pid, timestamp)
-  ├─ type Updates (channel of ProcessUpdate)
-  └─ emitted by: Manager callbacks → UpdateBus
-
-JSONRPCProtocol (schema)
-  ├─ type RPCRequest (jsonrpc 2.0: method, params, id)
-  ├─ type RPCResponse (result | error, id)
-  ├─ type ProcessInfo (name, status, pid)
-  ├─ type ActionRequest/Response (for start/stop/restart/reload)
-  └─ used by: Handler.RouteRequest() ↔ ctl/main
-```
+### Impact
+- Removed ~36 lines of code (type definitions, methods)
+- No behavior changes - all 36 e2e tests passing
+- Clearer ownership model: EventLoop owns all state
+- Simpler type hierarchy
 
 ---
 
-## REFACTORING IMPACT ZONES
+## ARCHITECTURE (Updated)
 
-**If you change ProcessExecutor interface:**
-  → Only OsProcessExecutor + ProcessWatcher affected  
-  → Safe to change (isolated behind interface)
+### Command Flow
+```
+RPC Request → Handler.RouteRequest(ProcessManager)
+            ↓
+          Manager.{Start|Stop|Restart|Reload|Shutdown}
+            ↓
+          Send ManagerCommand to commandCh
+            ↓
+          EventLoop receives → handleCommand
+            ↓
+          doStart/doStop/doRestart/doReload/doShutdown
+            ↓
+          Direct state mutation or Watchdog spawn
+            ↓
+          Status updates via Status channel
+            ↓
+          handleStatusUpdate applies changes
+```
 
-**If you change RetryStrategy interface:**
-  → Only implementations + RetryStrategyFactory + ProcessWatcher affected  
-  → Safe to refactor (contract is clear)
+### Query Flow
+```
+RPC Request → Handler.RouteRequest(ProcessManager)
+           ↓
+         Manager.GetProcessInfo/GetAllProcessInfo
+           ↓
+         Send ManagerQuery to queryCh
+           ↓
+         EventLoop receives → drainStatus() → handleQuery
+           ↓
+         Direct Process map read (no methods needed)
+           ↓
+         Send QueryResult
+```
 
-**If you change Manager interface:**
-  → Handler + cmd/daemon/main affected  
-  → Ripple to channels.go (command dispatch)  
-  → ⚠️ Larger refactor zone
-
-**If you change RPC protocol (jsonrpc.go):**
-  → Handler + ctl/main affected  
-  → Protocol is the daemon-to-client contract  
-  → ⚠️ Breaking change (version carefully)
-
-**If you change ProcessUpdate (bus/event.go):**
-  → Any listener on UpdateBus affected  
-  → ctl/main listens for status updates  
-  → ⚠️ May break clients
-
----
-
-## KEY DESIGN PRINCIPLES
-
-1. **Interfaces as boundaries** — ProcessExecutor, RetryStrategy, SignalHandler are contracts, not coupling
-2. **Single responsibility per layer** — cmd only knows Manager; app only knows engine; engine knows nothing of RPC
-3. **Dependency injection** — Watcher doesn't create executor; it receives it (testable, flexible)
-4. **Event-driven state** — Manager emits ProcessUpdate events; handlers listen (loose coupling)
-5. **Graceful shutdown** — ProcessStopper manages signal→SIGKILL flow (timeout handling)
+### Watchdog Lifecycle
+```
+EventLoop spawns Watchdog(ConfigSpec, ProcessInstance)
+           ↓
+Watchdog creates ProcessWatcher with RetryStrategyFunc
+           ↓
+watcher.Run() with callbacks (unchanged from Phase 1)
+           ↓
+Callbacks send ProcessUpdate to Status channel
+           ↓
+EventLoop.handleStatusUpdate applies to Process state
+```

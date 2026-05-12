@@ -17,7 +17,7 @@ type SocketListener struct {
 
 // NewSocketListener creates and starts a Unix socket listener.
 // Returns a SocketListener that can be stopped via Stop() method.
-func NewSocketListener(path string, m ProcessManager) (*SocketListener, error) {
+func NewSocketListener(path string, m *Manager) (*SocketListener, error) {
 	_ = os.Remove(path)
 
 	l, err := net.Listen("unix", path)
@@ -43,7 +43,7 @@ func NewSocketListener(path string, m ProcessManager) (*SocketListener, error) {
 }
 
 // serve runs the accept loop until Stop() is called.
-func (sl *SocketListener) serve(m ProcessManager) {
+func (sl *SocketListener) serve(m *Manager) {
 	defer sl.wg.Done()
 
 	for {
@@ -84,6 +84,6 @@ func (sl *SocketListener) Addr() net.Addr {
 
 // StartSocketListener creates a socket listener and returns the handle.
 // The caller can shut down the listener by calling Stop() on the returned handle.
-func StartSocketListener(path string, m ProcessManager) (*SocketListener, error) {
+func StartSocketListener(path string, m *Manager) (*SocketListener, error) {
 	return NewSocketListener(path, m)
 }
