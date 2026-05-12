@@ -6,17 +6,29 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
+
 	"taskmaster/internal/config"
 )
 
+type ExitCode int
 
-// OsProcessExecutor implements ConfigurableProcessExecutor using os/exec.
-type OsProcessExecutor struct {
-	// Note: No mutex needed - each process's files are managed by its Watchdog goroutine
+type Process struct {
+	PID    int
+	Stdin  io.WriteCloser
+	Stdout io.ReadCloser
+	Stderr io.ReadCloser
 }
 
-// NewOsProcessExecutor creates a new OsProcessExecutor.
+type ProcessExecutor interface {
+	Start(ctx context.Context, spec config.ConfigSpec) (*Process, error)
+	Wait(ctx context.Context, pid int) (ExitCode, error)
+	Signal(ctx context.Context, pid int, signal interface{}) error
+}
+
+type OsProcessExecutor struct{}
+
 func NewOsProcessExecutor() *OsProcessExecutor {
 	return &OsProcessExecutor{}
 }
@@ -28,7 +40,6 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 		return nil, fmt.Errorf("build command failed: %w", err)
 	}
 
-	// If context is provided, replace with context-aware command while preserving configuration
 	if ctx != nil {
 		newCmd := exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
 		newCmd.Dir = cmd.Dir
@@ -40,7 +51,6 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 		cmd = newCmd
 	}
 
-	// Apply umask before cmd.Start (always apply, even if 0)
 	oldMask := syscall.Umask(spec.Umask)
 	defer func() {
 		syscall.Umask(oldMask)
@@ -48,80 +58,60 @@ func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (
 
 	err = cmd.Start()
 	if err != nil {
-		// Close any opened files on error
 		e.closeFiles(cmd)
 		return nil, fmt.Errorf("start failed: %w", err)
 	}
 
 	pid := cmd.Process.Pid
-
-	// Note: Files are now closed by the caller (Watchdog) after Wait() returns
-	// No need to track them in a map
-
 	return &Process{PID: pid}, nil
 }
 
-// Wait blocks until the process with the given PID exits.
 func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error) {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return -1, fmt.Errorf("find process failed: %w", err)
 	}
 
-	// Check for cancellation before waiting
 	select {
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	default:
 	}
 
-	// Use a goroutine to wait on the process in parallel with context
-	done := make(chan struct {
+	type result struct {
 		exitCode ExitCode
 		err      error
-	}, 1)
+	}
+	done := make(chan result, 1)
 
 	go func() {
 		state, err := proc.Wait()
 		if err != nil {
-			done <- struct {
-				exitCode ExitCode
-				err      error
-			}{-1, fmt.Errorf("wait failed: %w", err)}
+			done <- result{-1, fmt.Errorf("wait failed: %w", err)}
 			return
 		}
 
 		exitCode := 0
-		// Check if process was killed by signal vs normal exit
 		if exitStatus, ok := state.Sys().(syscall.WaitStatus); ok {
 			if exitStatus.Signaled() {
-				// Killed by signal - use Unix convention: 128 + signal number
-				// This ensures signal deaths are treated as "non-zero exit" for restart logic
 				exitCode = 128 + int(exitStatus.Signal())
 			} else if !state.Success() {
-				// Normal non-zero exit
 				exitCode = exitStatus.ExitStatus()
 			}
 		} else if !state.Success() {
-			// Fallback: non-zero exit but can't get details
 			exitCode = 1
 		}
-		done <- struct {
-			exitCode ExitCode
-			err      error
-		}{ExitCode(exitCode), nil}
+		done <- result{ExitCode(exitCode), nil}
 	}()
 
-	// Wait for either the process or context cancellation
 	select {
-	case result := <-done:
-		return result.exitCode, result.err
+	case r := <-done:
+		return r.exitCode, r.err
 	case <-ctx.Done():
 		return -1, ctx.Err()
 	}
 }
 
-// Signal sends a signal to the process with the given PID.
 func (e *OsProcessExecutor) Signal(ctx context.Context, pid int, signal interface{}) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
@@ -134,13 +124,11 @@ func (e *OsProcessExecutor) Signal(ctx context.Context, pid int, signal interfac
 	return proc.Signal(sig)
 }
 
-// closeFiles closes file handles attached to an exec.Cmd.
 func (e *OsProcessExecutor) closeFiles(cmd *exec.Cmd) {
 	if f, ok := cmd.Stdout.(io.Closer); ok && f != nil {
 		f.Close()
 	}
 	if f, ok := cmd.Stderr.(io.Closer); ok && f != nil {
-		// Avoid closing same file twice if stdout and stderr point to same file
 		if sf, ok := cmd.Stdout.(*os.File); ok {
 			if tf, ok := f.(*os.File); ok && sf == tf {
 				return
@@ -148,4 +136,52 @@ func (e *OsProcessExecutor) closeFiles(cmd *exec.Cmd) {
 		}
 		f.Close()
 	}
+}
+
+type CommandBuilder struct{}
+
+func (cb *CommandBuilder) BuildCommand(spec config.ConfigSpec) (*exec.Cmd, error) {
+	parts := strings.Fields(spec.Cmd)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("no command specified")
+	}
+
+	cmd := exec.Command(parts[0], parts[1:]...)
+
+	if spec.Workingdir != "" {
+		cmd.Dir = spec.Workingdir
+	}
+
+	env := os.Environ()
+	if spec.Env != nil {
+		for key, value := range spec.Env {
+			env = append(env, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+	cmd.Env = env
+
+	var outF *os.File
+	if spec.Stdout != "" {
+		var err error
+		outF, err = os.OpenFile(spec.Stdout, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			return nil, fmt.Errorf("open stdout %s: %w", spec.Stdout, err)
+		}
+		cmd.Stdout = outF
+	}
+
+	if spec.Stderr != "" {
+		errF, err := os.OpenFile(spec.Stderr, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if err != nil {
+			if outF != nil {
+				outF.Close()
+			}
+			return nil, fmt.Errorf("open stderr %s: %w", spec.Stderr, err)
+		}
+		cmd.Stderr = errF
+	} else if cmd.Stdout != nil {
+		cmd.Stderr = cmd.Stdout
+	}
+
+	return cmd, nil
 }

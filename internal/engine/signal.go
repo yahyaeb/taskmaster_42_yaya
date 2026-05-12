@@ -7,8 +7,20 @@ import (
 	"time"
 )
 
-// SignalFromString converts a signal name string to os.Signal.
-// Supports: TERM, HUP, INT, QUIT, KILL, USR1, USR2
+type SignalHandler interface {
+	Send(p *Process, sig os.Signal) error
+}
+
+type OSSignalHandler struct{}
+
+func (h *OSSignalHandler) Send(p *Process, sig os.Signal) error {
+	proc, err := os.FindProcess(p.PID)
+	if err != nil {
+		return fmt.Errorf("find process %d: %w", p.PID, err)
+	}
+	return proc.Signal(sig)
+}
+
 func SignalFromString(sig string) (os.Signal, error) {
 	switch sig {
 	case "TERM":
@@ -16,11 +28,11 @@ func SignalFromString(sig string) (os.Signal, error) {
 	case "HUP":
 		return syscall.SIGHUP, nil
 	case "INT":
-		return os.Interrupt, nil // SIGINT
+		return os.Interrupt, nil
 	case "QUIT":
 		return syscall.SIGQUIT, nil
 	case "KILL":
-		return os.Kill, nil // SIGKILL
+		return os.Kill, nil
 	case "USR1":
 		return syscall.SIGUSR1, nil
 	case "USR2":
@@ -30,16 +42,13 @@ func SignalFromString(sig string) (os.Signal, error) {
 	}
 }
 
-// ProcessStopper is responsible for gracefully stopping a process,
-// escalating to SIGKILL if it doesn't terminate within the timeout.
 type ProcessStopper struct {
-	handler     SignalHandler
-	executor    ProcessExecutor
-	timeout     time.Duration
-	stopsignal  os.Signal
+	handler    SignalHandler
+	executor   ProcessExecutor
+	timeout    time.Duration
+	stopsignal os.Signal
 }
 
-// NewProcessStopper creates a new ProcessStopper with the given signal handler, executor, timeout, and stop signal.
 func NewProcessStopper(handler SignalHandler, executor ProcessExecutor, timeout time.Duration, sig os.Signal) *ProcessStopper {
 	return &ProcessStopper{
 		handler:    handler,
@@ -49,11 +58,7 @@ func NewProcessStopper(handler SignalHandler, executor ProcessExecutor, timeout 
 	}
 }
 
-// Stop sends the configured stop signal to the process.
-// The watchdog is responsible for waiting for the process to exit.
-// This method returns after sending the signal; the Watchdog will handle the wait and escalation to SIGKILL.
 func (ps *ProcessStopper) Stop(p *Process) error {
-	// Send the configured stop signal
 	if err := ps.handler.Send(p, ps.stopsignal); err != nil {
 		return fmt.Errorf("failed to send signal: %w", err)
 	}

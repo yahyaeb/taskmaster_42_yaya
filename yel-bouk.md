@@ -23,20 +23,22 @@ Catch SIGHUP in the daemon's main loop using signal.Notify. When received: reloa
 6. Shutdown command
 Taskmaster.Shutdown RPC → stop all running processes cleanly → exit the daemon.
 
-Shared contracts:
+---
 
-Socket: /tmp/taskmaster.sock
-Instance names: nginx:01, nginx:02 (always use config.FormatInstanceName)
-Statuses: "starting" "running" "backoff" "stopped" "fatal"
-RPC method format: Taskmaster.GetStatus, Taskmaster.Start, etc.
-Params: {"name": "nginx:01"} — use "all" to target everything
+## TODO (Evaluation Completion)
 
+### Mandatory
+**CTL Interactive Shell** (`cmd/ctl/main.go`) - Readline library for line editing + history. Commands: `status`, `start <name>`, `stop <name>`, `restart <name>`, `reload`, `exit`. Status prints table: name/status/pid/uptime/retries.
+**Logger** - Subscribe to `chan bus.ProcessUpdate`, append to log file: `[2024-01-15 14:32:01] nginx:01 → running (pid 4821)`. Must log: start, stop, restart, unexpected exit, abort after max retries.
 
-### bde-albu
-Shared contracts:
+### Bonus
+**Privilege De-escalation** - Config option to run program as specific user (setuid/setgid).
+**Client/Server Architecture** - Daemon + separate control program via unix socket (already partially done - verify full separation).
+**Advanced Logging** - Email alerts, HTTP webhooks, or syslog integration on critical events.
+**Attach Console** (+2 points) - Like `screen`/`tmux`: attach to supervised process stdin/stdout in current terminal.
 
-Socket: /tmp/taskmaster.sock
-Instance names: nginx:01, nginx:02 (always config.FormatInstanceName)
-Statuses: "starting" "running" "backoff" "stopped" "fatal"
-RPC format: RPCRequest / RPCResponse from internal/protocol/jsonrpc.go
-Event bus: chan bus.ProcessUpdate — write to it on every state change
+### Evaluation Checklist
+Kill supervised process → verifies auto-restart works.
+Supervise failing process → verifies abort after max retries.
+SIGHUP triggers hot-reload without affecting unchanged processes.
+All 13 config options from evaluation guide tested and working.

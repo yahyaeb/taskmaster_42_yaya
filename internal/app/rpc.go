@@ -2,53 +2,30 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
+	"os"
 	"strings"
+	"sync"
 
 	"taskmaster/internal/protocol"
 )
 
-// HandlerFunc is the signature for RPC method handlers.
 type HandlerFunc func(*Manager, map[string]any) (any, error)
 
-// handlerRegistry maps method names to their handlers and validation rules.
 type handlerInfo struct {
 	fn        HandlerFunc
-	needsName bool // if true, requires "name" parameter
-	allowAll  bool // if true, allows "all" as name
+	needsName bool
+	allowAll  bool
 }
 
 var handlers = map[string]handlerInfo{
-	"GetStatus": {
-		fn:        handleGetStatus,
-		needsName: false,
-		allowAll:  true,
-	},
-	"Start": {
-		fn:        handleStart,
-		needsName: true,
-		allowAll:  false,
-	},
-	"Stop": {
-		fn:        handleStop,
-		needsName: true,
-		allowAll:  false,
-	},
-	"Restart": {
-		fn:        handleRestart,
-		needsName: true,
-		allowAll:  false,
-	},
-	"Reload": {
-		fn:        handleReload,
-		needsName: false,
-		allowAll:  false,
-	},
-	"Shutdown": {
-		fn:        handleShutdown,
-		needsName: false,
-		allowAll:  false,
-	},
+	"GetStatus": {fn: handleGetStatus, needsName: false, allowAll: true},
+	"Start":     {fn: handleStart, needsName: true, allowAll: false},
+	"Stop":      {fn: handleStop, needsName: true, allowAll: false},
+	"Restart":   {fn: handleRestart, needsName: true, allowAll: false},
+	"Reload":    {fn: handleReload, needsName: false, allowAll: false},
+	"Shutdown":  {fn: handleShutdown, needsName: false, allowAll: false},
 }
 
 func HandleConnection(conn net.Conn, manager *Manager) {
@@ -88,7 +65,6 @@ func RouteRequest(req *protocol.RPCRequest, manager *Manager) *protocol.RPCRespo
 		params, _ := req.Params.(map[string]any)
 		name, _ := params["name"].(string)
 
-		// Validate parameters
 		if info.needsName {
 			if name == "" {
 				return protocol.NewErrorResponse(protocol.InvalidParams, "name is required", req.ID)
@@ -100,14 +76,12 @@ func RouteRequest(req *protocol.RPCRequest, manager *Manager) *protocol.RPCRespo
 			return protocol.NewErrorResponse(protocol.InvalidParams, action+" does not accept a name", req.ID)
 		}
 
-		// Pre-check for process existence when name is provided
 		if name != "" && name != "all" && action != "GetStatus" {
 			if _, err := manager.GetProcessInfo(name); err != nil {
 				return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
 			}
 		}
 
-		// Execute handler
 		result, err := info.fn(manager, params)
 		if err != nil {
 			return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
@@ -125,8 +99,6 @@ func withRecovery(fn func() *protocol.RPCResponse, id int) (resp *protocol.RPCRe
 	}()
 	return fn()
 }
-
-// Handler implementations
 
 func handleGetStatus(m *Manager, params map[string]any) (any, error) {
 	name, _ := params["name"].(string)
@@ -177,4 +149,74 @@ func handleShutdown(m *Manager, params map[string]any) (any, error) {
 		return nil, err
 	}
 	return protocol.ActionResponse{Success: true, Message: "Daemon shutting down..."}, nil
+}
+
+type SocketListener struct {
+	listener net.Listener
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+	path     string
+}
+
+func NewSocketListener(path string, m *Manager) (*SocketListener, error) {
+	_ = os.Remove(path)
+
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.Chmod(path, 0666); err != nil {
+		l.Close()
+		return nil, err
+	}
+
+	sl := &SocketListener{
+		listener: l,
+		stopChan: make(chan struct{}),
+		path:     path,
+	}
+
+	sl.wg.Add(1)
+	go sl.serve(m)
+
+	return sl, nil
+}
+
+func (sl *SocketListener) serve(m *Manager) {
+	defer sl.wg.Done()
+
+	for {
+		conn, err := sl.listener.Accept()
+		if err != nil {
+			select {
+			case <-sl.stopChan:
+				return
+			default:
+			}
+			fmt.Printf("Error accepting connection: %v\n", err)
+			continue
+		}
+
+		sl.wg.Add(1)
+		go func() {
+			defer sl.wg.Done()
+			HandleConnection(conn, m)
+		}()
+	}
+}
+
+func (sl *SocketListener) Stop() error {
+	close(sl.stopChan)
+	err := sl.listener.Close()
+	sl.wg.Wait()
+	return err
+}
+
+func (sl *SocketListener) Addr() net.Addr {
+	return sl.listener.Addr()
+}
+
+func StartSocketListener(path string, m *Manager) (*SocketListener, error) {
+	return NewSocketListener(path, m)
 }

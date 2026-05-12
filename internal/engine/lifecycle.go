@@ -6,28 +6,46 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
+
 	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
-	"time"
 )
 
-// ProcessWatcher monitors a single process execution.
-// It runs the process once, sends status updates, and returns the exit code.
-// Retry logic is handled by the caller (Manager).
+type RetryConfig struct {
+	MaxRetries  int
+	RetryDelay  time.Duration
+	ExitCodes   []int
+	AutoRestart string
+}
+
+func ShouldRestart(autorestart string, exitCode int, exitcodes []int) bool {
+	switch autorestart {
+	case "always":
+		return true
+	case "never":
+		return false
+	case "unexpected":
+		for _, expected := range exitcodes {
+			if exitCode == expected {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+}
+
 type ProcessWatcher struct {
 	Executor ProcessExecutor
 }
 
-// NewProcessWatcher creates a new ProcessWatcher with the given executor.
 func NewProcessWatcher(executor ProcessExecutor) *ProcessWatcher {
 	return &ProcessWatcher{Executor: executor}
 }
 
-// Run starts a process and monitors it until completion or context cancellation.
-// Returns the exit code when the process exits, or error if context cancelled.
-// Status updates (STARTING, RUNNING) are sent to the updates channel.
 func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updates chan<- bus.ProcessUpdate) (ExitCode, error) {
-	// Start the process
 	process, err := pw.Executor.Start(ctx, spec)
 	if err != nil {
 		updates <- bus.ProcessUpdate{
@@ -37,7 +55,6 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 		return 0, fmt.Errorf("spawn failed: %w", err)
 	}
 
-	// Process started - send STARTING update
 	updates <- bus.ProcessUpdate{
 		Name:       spec.ProcessName,
 		Status:     bus.STARTING,
@@ -47,7 +64,6 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 		LastStart:  time.Now(),
 	}
 
-	// Handle starttime observation window
 	starttime := time.Duration(spec.Starttime) * time.Second
 	if starttime > 0 {
 		timer := time.NewTimer(starttime)
@@ -55,7 +71,6 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 		var earlyExitOnce sync.Once
 		done := make(chan struct{})
 
-		// Poll to check if process dies during starttime
 		go func() {
 			ticker := time.NewTicker(100 * time.Millisecond)
 			defer ticker.Stop()
@@ -79,13 +94,11 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 		case <-earlyExit:
 			timer.Stop()
 			close(done)
-			// Process died during starttime - return without sending RUNNING
 			exitCode, _ := pw.Executor.Wait(ctx, process.PID)
 			return exitCode, nil
 
 		case <-timer.C:
 			close(done)
-			// Process survived starttime - now RUNNING
 			updates <- bus.ProcessUpdate{
 				Name:   spec.ProcessName,
 				Status: bus.RUNNING,
@@ -98,7 +111,6 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 			return 0, ctx.Err()
 		}
 	} else {
-		// No starttime required - mark as RUNNING immediately
 		updates <- bus.ProcessUpdate{
 			Name:   spec.ProcessName,
 			Status: bus.RUNNING,
@@ -106,7 +118,6 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 		}
 	}
 
-	// Wait for process to exit
 	exitCode, err := pw.Executor.Wait(ctx, process.PID)
 	if err != nil {
 		return exitCode, err

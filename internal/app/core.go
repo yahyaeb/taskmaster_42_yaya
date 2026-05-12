@@ -1,11 +1,15 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"slices"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"taskmaster/internal/bus"
@@ -14,9 +18,36 @@ import (
 	"taskmaster/internal/protocol"
 )
 
-// ProcessInstance represents the runtime state of a single process.
-// It is owned by its Watchdog goroutine; Manager only accesses it
-// through Status channel updates or when holding the mutex.
+type ProcessChannels struct {
+	Status chan bus.ProcessUpdate
+	Stop   map[string]chan struct{}
+}
+
+func NewProcessChannels() *ProcessChannels {
+	return &ProcessChannels{
+		Status: make(chan bus.ProcessUpdate, 100),
+		Stop:   make(map[string]chan struct{}),
+	}
+}
+
+type ReloadResult struct {
+	Added     []string
+	Removed   []string
+	Restarted []string
+}
+
+type ProcessManager interface {
+	GetProcessInfo(name string) (protocol.ProcessInfo, error)
+	GetAllProcessInfo() ([]protocol.ProcessInfo, error)
+	Start(name string) error
+	Stop(name string) error
+	Restart(name string) error
+	Reload() (*ReloadResult, error)
+	Shutdown() error
+}
+
+var _ ProcessManager = (*Manager)(nil)
+
 type ProcessInstance struct {
 	Pid        int
 	Status     bus.Status
@@ -33,8 +64,6 @@ func newProcessInstance(autostart bool) *ProcessInstance {
 	}
 }
 
-// Manager orchestrates all processes. It is safe for concurrent use.
-// All state mutations are protected by mu mutex.
 type Manager struct {
 	mu           sync.Mutex
 	Config       map[string]*config.ConfigSpec
@@ -46,7 +75,6 @@ type Manager struct {
 	configPath   string
 }
 
-// NewManager creates a new Manager with no configuration loaded.
 func NewManager() *Manager {
 	return &Manager{
 		Config:   make(map[string]*config.ConfigSpec),
@@ -56,28 +84,18 @@ func NewManager() *Manager {
 	}
 }
 
-// SetShutdownFunc registers a callback to be invoked after all
-// processes are stopped during Shutdown().
 func (m *Manager) SetShutdownFunc(fn func()) {
 	m.shutdownFunc = fn
 }
 
-// SetChannels assigns the process communication channels.
 func (m *Manager) SetChannels(ch *ProcessChannels) {
 	m.ch = ch
 }
 
-// Channels returns the assigned process channels.
 func (m *Manager) Channels() *ProcessChannels {
 	return m.ch
 }
 
-// ---------------------------------------------------------------------------
-// Public API - these methods are safe to call from any goroutine.
-// Each acquires the mutex, performs work, and releases it.
-// ---------------------------------------------------------------------------
-
-// Start begins running the named process if it exists and is not already running.
 func (m *Manager) Start(name string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -110,7 +128,6 @@ func (m *Manager) Start(name string) error {
 	return nil
 }
 
-// Stop gracefully terminates the named process.
 func (m *Manager) Stop(name string) error {
 	m.mu.Lock()
 
@@ -138,7 +155,7 @@ func (m *Manager) Stop(name string) error {
 
 	closeChannel(stopChan)
 	delete(m.ch.Stop, name)
-	m.mu.Unlock() // release before blocking on stopper
+	m.mu.Unlock()
 
 	if pid > 0 {
 		sig, _ := engine.SignalFromString(m.Config[name].Stopsignal)
@@ -154,7 +171,6 @@ func (m *Manager) Stop(name string) error {
 
 	slog.Info("Stop requested", "name", name)
 
-	// Wait for status to reflect stop (with timeout)
 	stoptime := 10
 	if spec, ok := m.Config[name]; ok {
 		stoptime = spec.Stoptime + 2
@@ -176,13 +192,11 @@ func (m *Manager) Stop(name string) error {
 	return fmt.Errorf("timeout waiting for process to stop")
 }
 
-// Restart stops and then starts the named process.
 func (m *Manager) Restart(name string) error {
 	if err := m.Stop(name); err != nil {
 		return err
 	}
 
-	// Wait for process to actually stop
 	maxWait := 5 * time.Second
 	start := time.Now()
 	for time.Since(start) < maxWait {
@@ -195,10 +209,6 @@ func (m *Manager) Restart(name string) error {
 	return m.Start(name)
 }
 
-// Reload loads the configuration file and applies the changes:
-// - New processes are added and autostarted
-// - Removed processes are stopped
-// - Changed processes are restarted
 func (m *Manager) Reload() (*ReloadResult, error) {
 	if m.configPath == "" {
 		return nil, fmt.Errorf("no config path stored, use NewManagerFromConfig() to initialize Manager")
@@ -219,12 +229,10 @@ func (m *Manager) Reload() (*ReloadResult, error) {
 	return m.applyConfigDiff(newConfig)
 }
 
-// ReloadFromConfig applies a new configuration directly.
 func (m *Manager) ReloadFromConfig(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
 	return m.applyConfigDiff(newConfig)
 }
 
-// Shutdown stops all processes and invokes the shutdown callback if set.
 func (m *Manager) Shutdown() error {
 	m.mu.Lock()
 
@@ -256,7 +264,6 @@ func (m *Manager) Shutdown() error {
 	return nil
 }
 
-// GetProcessInfo returns information about a specific process.
 func (m *Manager) GetProcessInfo(name string) (protocol.ProcessInfo, error) {
 	m.drainStatus()
 
@@ -277,7 +284,6 @@ func (m *Manager) GetProcessInfo(name string) (protocol.ProcessInfo, error) {
 	}, nil
 }
 
-// GetAllProcessInfo returns information about all processes.
 func (m *Manager) GetAllProcessInfo() ([]protocol.ProcessInfo, error) {
 	m.drainStatus()
 
@@ -298,11 +304,6 @@ func (m *Manager) GetAllProcessInfo() ([]protocol.ProcessInfo, error) {
 	return result, nil
 }
 
-// ---------------------------------------------------------------------------
-// Internal methods
-// ---------------------------------------------------------------------------
-
-// applyConfigDiff applies a new configuration, returning what changed.
 func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -317,17 +318,14 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 		Restarted: []string{},
 	}
 
-	// Find removed processes
 	for name := range m.Config {
 		if _, exists := newConfig[name]; !exists {
 			result.Removed = append(result.Removed, name)
 		}
 	}
 
-	// Find added or changed processes
 	for name, newSpec := range newConfig {
 		if oldSpec, exists := m.Config[name]; !exists {
-			// New process
 			result.Added = append(result.Added, name)
 			m.Config[name] = newSpec
 			if _, ok := m.Process[name]; !ok {
@@ -340,7 +338,6 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 				go m.Watchdog(newSpec, m.Process[name])
 			}
 		} else if configChanged(oldSpec, newSpec) {
-			// Changed process
 			result.Restarted = append(result.Restarted, name)
 			m.Config[name] = newSpec
 			wasRunning := m.isRunning(name)
@@ -359,7 +356,6 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 		}
 	}
 
-	// Clean up removed processes
 	for _, name := range result.Removed {
 		if stopCh, ok := m.ch.Stop[name]; ok {
 			closeChannel(stopCh)
@@ -374,7 +370,6 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 	return result, nil
 }
 
-// configChanged reports whether two configs differ in a meaningful way.
 func configChanged(a, b *config.ConfigSpec) bool {
 	if a.Cmd != b.Cmd ||
 		a.Numprocs != b.Numprocs ||
@@ -405,7 +400,6 @@ func configChanged(a, b *config.ConfigSpec) bool {
 	return false
 }
 
-// slicesEqual compares two int slices, treating nil and empty as equal.
 func slicesEqual(a, b []int) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true
@@ -413,8 +407,6 @@ func slicesEqual(a, b []int) bool {
 	return slices.Equal(a, b)
 }
 
-// drainStatus drains all pending status updates from the channel.
-// Must be called without holding the mutex.
 func (m *Manager) drainStatus() {
 	for {
 		select {
@@ -426,8 +418,6 @@ func (m *Manager) drainStatus() {
 	}
 }
 
-// handleStatusUpdate applies a status update from a Watchdog.
-// This is the only way the Manager's view of process state is updated.
 func (m *Manager) handleStatusUpdate(update bus.ProcessUpdate) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -446,8 +436,6 @@ func (m *Manager) handleStatusUpdate(update bus.ProcessUpdate) {
 	}
 }
 
-// isRunning reports whether the named process is currently running.
-// Caller must hold the mutex.
 func (m *Manager) isRunning(name string) bool {
 	if m.ch == nil {
 		return false
@@ -456,7 +444,6 @@ func (m *Manager) isRunning(name string) bool {
 	return exists
 }
 
-// StopAll stops all running processes.
 func (m *Manager) StopAll() {
 	m.mu.Lock()
 
@@ -500,8 +487,6 @@ func (m *Manager) StopAll() {
 	}
 }
 
-// Spawn starts Watchdogs for all new processes in current config compared to prev.
-// Used during initial startup to start autostart processes.
 func (curr *Manager) Spawn(prev *Manager) {
 	curr.mu.Lock()
 	defer curr.mu.Unlock()
@@ -541,7 +526,6 @@ func (curr *Manager) Spawn(prev *Manager) {
 	}
 }
 
-// NewManagerFromConfig creates a Manager with configuration loaded from file.
 func NewManagerFromConfig(path string) (*Manager, error) {
 	loader := &config.YAMLLoader{}
 	specs, err := loader.Load(path)
@@ -563,7 +547,6 @@ func NewManagerFromConfig(path string) (*Manager, error) {
 	return manager, nil
 }
 
-// closeChannel safely closes a channel, recovering from double-close panics.
 func closeChannel(ch chan struct{}) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -573,7 +556,6 @@ func closeChannel(ch chan struct{}) {
 	close(ch)
 }
 
-// formatUptime formats a start time as a human-readable uptime string.
 func formatUptime(startTime time.Time) string {
 	duration := time.Since(startTime)
 	if startTime.IsZero() {
@@ -590,4 +572,174 @@ func formatUptime(startTime time.Time) string {
 		return fmt.Sprintf("%dm %ds", minutes, seconds)
 	}
 	return fmt.Sprintf("%ds", seconds)
+}
+
+func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
+	if m.ch == nil {
+		slog.Error("process channels not set", "program", setting.Program)
+		return
+	}
+
+	stop := m.ch.Stop[setting.ProcessName]
+	updates := m.ch.Status
+
+	if len(strings.Fields(setting.Cmd)) == 0 {
+		slog.Error("no command specified for program", "program", setting.Program)
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
+		return
+	}
+
+	if proc == nil {
+		slog.Error("ProcessInstance not found in manager", "process", setting.ProcessName)
+		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
+		return
+	}
+
+	var maxRetries int
+	if setting.Autorestart == "always" {
+		maxRetries = math.MaxInt
+	} else {
+		maxRetries = setting.Startretries
+	}
+
+	watcher := engine.NewProcessWatcher(m.executor)
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		select {
+		case <-stop:
+			updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
+			return
+		default:
+		}
+
+		if attempt > 0 {
+			updates <- bus.ProcessUpdate{
+				Name:       setting.ProcessName,
+				Status:     bus.BACKOFF,
+				Retries:    attempt,
+				HasRetries: true,
+			}
+			slog.Info("program backoff", "program", setting.Program, "attempt", attempt)
+
+			select {
+			case <-stop:
+				updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
+				return
+			case <-time.After(0):
+			}
+
+			updates <- bus.ProcessUpdate{
+				Name:   setting.ProcessName,
+				Status: bus.STARTING,
+			}
+			slog.Info("program starting (retry)", "program", setting.Program, "attempt", attempt)
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+
+		result := make(chan engine.ExitCode, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			exitCode, err := watcher.Run(ctx, *setting, updates)
+			if err != nil {
+				errCh <- err
+			} else {
+				result <- exitCode
+			}
+		}()
+
+		pidReady := make(chan int, 1)
+		go func() {
+			ticker := time.NewTicker(50 * time.Millisecond)
+			defer ticker.Stop()
+			for range ticker.C {
+				if proc, ok := m.Process[setting.ProcessName]; ok && proc.Pid > 0 {
+					pidReady <- proc.Pid
+					return
+				}
+			}
+		}()
+
+		var exitCode engine.ExitCode
+		var err error
+		var pid int
+		stopped := false
+		select {
+		case <-stop:
+			stopped = true
+			select {
+			case p := <-pidReady:
+				pid = p
+			case <-time.After(5 * time.Second):
+				if proc, ok := m.Process[setting.ProcessName]; ok && proc.Pid > 0 {
+					pid = proc.Pid
+				}
+			}
+
+			if pid > 0 {
+				sig, _ := engine.SignalFromString(setting.Stopsignal)
+				if sig == nil {
+					sig, _ = engine.SignalFromString("TERM")
+				}
+
+				p := &engine.Process{PID: pid}
+				if stopErr := m.handler.Send(p, sig); stopErr != nil {
+					slog.Error("error sending stop signal", "program", setting.Program, "error", stopErr)
+				}
+
+				select {
+				case exitCode = <-result:
+				case err = <-errCh:
+				case <-time.After(time.Duration(setting.Stoptime) * time.Second):
+					if killErr := m.handler.Send(p, syscall.SIGKILL); killErr == nil {
+						slog.Info("sent SIGKILL after timeout", "program", setting.Program, "pid", pid)
+					}
+					select {
+					case exitCode = <-result:
+					case err = <-errCh:
+					case <-time.After(2 * time.Second):
+						slog.Error("process did not die after SIGKILL", "program", setting.Program, "pid", pid)
+					}
+				}
+			}
+			cancel()
+
+		case exitCode = <-result:
+			cancel()
+
+		case err = <-errCh:
+			cancel()
+		}
+
+		if stopped {
+			updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
+			return
+		}
+
+		if err != nil {
+			slog.Error("program exited with error", "program", setting.Program, "error", err, "attempt", attempt)
+			updates <- bus.ProcessUpdate{
+				Name:       setting.ProcessName,
+				Status:     bus.FATAL,
+				Retries:    attempt,
+				HasRetries: true,
+			}
+			return
+		}
+
+		if !engine.ShouldRestart(setting.Autorestart, int(exitCode), setting.Exitcodes) {
+			if exitCode == 0 {
+				slog.Info("program exited successfully", "program", setting.Program)
+			} else {
+				slog.Error("program exited with code", "program", setting.Program, "code", exitCode)
+			}
+			updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
+			return
+		}
+
+		slog.Info("program will restart", "program", setting.Program, "exitCode", exitCode, "attempt", attempt+1)
+	}
+
+	slog.Error("max retries exceeded", "program", setting.Program)
+	updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
 }
