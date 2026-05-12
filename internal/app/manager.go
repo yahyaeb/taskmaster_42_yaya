@@ -65,7 +65,7 @@ func (m *Manager) Channels() *ProcessChannels {
 	return m.ch
 }
 
-func (m *Manager) EventLoop() {
+func (m *Manager) Run() {
 	for req := range m.reqCh {
 		switch req.Type {
 		case "start":
@@ -211,10 +211,10 @@ func (m *Manager) handleReload() (*ReloadResult, error) {
 		newConfig[spec.ProcessName] = spec
 	}
 
-	return m.handleReloadFromConfig(newConfig)
+	return m.applyConfigDiff(newConfig)
 }
 
-func (m *Manager) handleReloadFromConfig(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
+func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
 	if m.ch == nil {
 		return nil, fmt.Errorf("process channels not set")
 	}
@@ -581,7 +581,7 @@ func (m *Manager) Reload() (*ReloadResult, error) {
 }
 
 func (m *Manager) ReloadFromConfig(newConfig map[string]*config.ConfigSpec) (*ReloadResult, error) {
-	return m.handleReloadFromConfig(newConfig)
+	return m.applyConfigDiff(newConfig)
 }
 
 func (m *Manager) Shutdown() error {

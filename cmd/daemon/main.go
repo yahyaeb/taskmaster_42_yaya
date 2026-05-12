@@ -23,7 +23,7 @@ func main() {
 	manager.SetChannels(ch)
 
 	// Start the Manager's event loop in a goroutine
-	go manager.EventLoop()
+	go manager.Run()
 
 	manager.Spawn(app.NewManager())
 
