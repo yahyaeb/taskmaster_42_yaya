@@ -50,6 +50,9 @@ tmp/
 temp/
 *.log
 
+# E2E test logs (for debugging)
+e2e/logs/
+
 # Project-specific
 .context/
 
@@ -58,3 +61,5 @@ repomix-output.xml
 
 # Binary files
 *.bin
+.cursor/
+.claude/

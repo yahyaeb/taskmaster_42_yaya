@@ -1,0 +1,222 @@
+package app
+
+import (
+	"encoding/json"
+	"fmt"
+	"net"
+	"os"
+	"strings"
+	"sync"
+
+	"taskmaster/internal/protocol"
+)
+
+type HandlerFunc func(*Manager, map[string]any) (any, error)
+
+type handlerInfo struct {
+	fn        HandlerFunc
+	needsName bool
+	allowAll  bool
+}
+
+var handlers = map[string]handlerInfo{
+	"GetStatus": {fn: handleGetStatus, needsName: false, allowAll: true},
+	"Start":     {fn: handleStart, needsName: true, allowAll: false},
+	"Stop":      {fn: handleStop, needsName: true, allowAll: false},
+	"Restart":   {fn: handleRestart, needsName: true, allowAll: false},
+	"Reload":    {fn: handleReload, needsName: false, allowAll: false},
+	"Shutdown":  {fn: handleShutdown, needsName: false, allowAll: false},
+}
+
+func HandleConnection(conn net.Conn, manager *Manager) {
+	defer conn.Close()
+
+	decoder := json.NewDecoder(conn)
+	encoder := json.NewEncoder(conn)
+
+	var req protocol.RPCRequest
+	if err := decoder.Decode(&req); err != nil {
+		resp := protocol.NewErrorResponse(protocol.ParseError, "parse error", 0)
+		_ = encoder.Encode(resp)
+		return
+	}
+
+	resp := RouteRequest(&req, manager)
+	_ = encoder.Encode(resp)
+}
+
+func RouteRequest(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
+	if req.Method == "" {
+		return protocol.NewErrorResponse(protocol.InvalidRequest, "method is required", req.ID)
+	}
+
+	parts := strings.Split(req.Method, ".")
+	if len(parts) != 2 || parts[0] != "Taskmaster" {
+		return protocol.NewErrorResponse(protocol.InvalidRequest, "invalid method format", req.ID)
+	}
+
+	action := parts[1]
+	info, ok := handlers[action]
+	if !ok {
+		return protocol.NewErrorResponse(protocol.MethodNotFound, "method not found", req.ID)
+	}
+
+	return withRecovery(func() *protocol.RPCResponse {
+		params, _ := req.Params.(map[string]any)
+		name, _ := params["name"].(string)
+
+		if info.needsName {
+			if name == "" {
+				return protocol.NewErrorResponse(protocol.InvalidParams, "name is required", req.ID)
+			}
+			if !info.allowAll && name == "all" {
+				return protocol.NewErrorResponse(protocol.InvalidParams, "cannot use 'all' with "+action, req.ID)
+			}
+		} else if name != "" && !info.allowAll {
+			return protocol.NewErrorResponse(protocol.InvalidParams, action+" does not accept a name", req.ID)
+		}
+
+		if name != "" && name != "all" && action != "GetStatus" {
+			if _, err := manager.GetProcessInfo(name); err != nil {
+				return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
+			}
+		}
+
+		result, err := info.fn(manager, params)
+		if err != nil {
+			return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
+		}
+
+		return protocol.NewSuccessResponse(result, req.ID)
+	}, req.ID)
+}
+
+func withRecovery(fn func() *protocol.RPCResponse, id int) (resp *protocol.RPCResponse) {
+	defer func() {
+		if r := recover(); r != nil {
+			resp = protocol.NewErrorResponse(protocol.InternalError, "internal error", id)
+		}
+	}()
+	return fn()
+}
+
+func handleGetStatus(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	if name == "" || name == "all" {
+		return m.GetAllProcessInfo()
+	}
+	return m.GetProcessInfo(name)
+}
+
+func handleStart(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	if err := m.Start(name); err != nil {
+		return nil, err
+	}
+	return protocol.ActionResponse{Success: true, Message: "process starting"}, nil
+}
+
+func handleStop(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	if err := m.Stop(name); err != nil {
+		return nil, err
+	}
+	return protocol.ActionResponse{Success: true, Message: "process stopping"}, nil
+}
+
+func handleRestart(m *Manager, params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	if err := m.Restart(name); err != nil {
+		return nil, err
+	}
+	return protocol.ActionResponse{Success: true, Message: "process restarting"}, nil
+}
+
+func handleReload(m *Manager, params map[string]any) (any, error) {
+	result, err := m.Reload()
+	if err != nil {
+		return nil, err
+	}
+	return protocol.ReloadResponse{
+		Added:     result.Added,
+		Removed:   result.Removed,
+		Restarted: result.Restarted,
+	}, nil
+}
+
+func handleShutdown(m *Manager, params map[string]any) (any, error) {
+	if err := m.Shutdown(); err != nil {
+		return nil, err
+	}
+	return protocol.ActionResponse{Success: true, Message: "Daemon shutting down..."}, nil
+}
+
+type SocketListener struct {
+	listener net.Listener
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+	path     string
+}
+
+func NewSocketListener(path string, m *Manager) (*SocketListener, error) {
+	_ = os.Remove(path)
+
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := os.Chmod(path, 0666); err != nil {
+		l.Close()
+		return nil, err
+	}
+
+	sl := &SocketListener{
+		listener: l,
+		stopChan: make(chan struct{}),
+		path:     path,
+	}
+
+	sl.wg.Add(1)
+	go sl.serve(m)
+
+	return sl, nil
+}
+
+func (sl *SocketListener) serve(m *Manager) {
+	defer sl.wg.Done()
+
+	for {
+		conn, err := sl.listener.Accept()
+		if err != nil {
+			select {
+			case <-sl.stopChan:
+				return
+			default:
+			}
+			fmt.Printf("Error accepting connection: %v\n", err)
+			continue
+		}
+
+		sl.wg.Add(1)
+		go func() {
+			defer sl.wg.Done()
+			HandleConnection(conn, m)
+		}()
+	}
+}
+
+func (sl *SocketListener) Stop() error {
+	close(sl.stopChan)
+	err := sl.listener.Close()
+	sl.wg.Wait()
+	return err
+}
+
+func (sl *SocketListener) Addr() net.Addr {
+	return sl.listener.Addr()
+}
+
+func StartSocketListener(path string, m *Manager) (*SocketListener, error) {
+	return NewSocketListener(path, m)
+}

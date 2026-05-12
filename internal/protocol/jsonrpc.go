@@ -59,6 +59,21 @@ Example Result for "Taskmaster.Shutdown":
 
 package protocol
 
+// JSON-RPC 2.0 Standard Error Codes
+const (
+	ParseError     = -32700 // Invalid JSON
+	InvalidRequest = -32600 // Invalid request object
+	MethodNotFound = -32601 // Method does not exist
+	InvalidParams  = -32602 // Invalid method parameters
+	InternalError  = -32603 // Internal JSON-RPC error
+)
+// Taskmaster-Specific Error Codes
+const (
+	ProcessNotFound  = -32001 // Process name not found
+	OperationFailed  = -32003 // Manager operation failed
+)
+
+
 // RPCRequest represents the standard JSON-RPC 2.0 request envelope
 type RPCRequest struct {
 	Jsonrpc string      `json:"jsonrpc"`
@@ -105,14 +120,15 @@ type ReloadResponse struct {
 	Restarted []string `json:"restarted"`
 }
 
-func NewErrorRsponse(code int, message string) *RPCResponse {
+// NewErrorResponse creates an error response with the given code, message, and request ID.
+func NewErrorResponse(code int, message string, id int) *RPCResponse {
 	return &RPCResponse{
 		Jsonrpc: "2.0",
 		Error: &RPCError{
 			Code:    code,
 			Message: message,
 		},
-		ID: 1,
+		ID: id,
 	}
 }
 

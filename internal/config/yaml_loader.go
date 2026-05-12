@@ -21,26 +21,48 @@ type YAMLLoader struct{}
 
 // Load reads a YAML configuration file and returns parsed ConfigSpecs.
 // It expands instances based on Numprocs field.
+// Returns error if any spec fails validation.
 func (l *YAMLLoader) Load(path string) ([]ConfigSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config file %s: %w", path, err)
 	}
 
-	var raw map[string]ConfigSpec
-	err = yaml.Unmarshal(data, &raw)
-	if err != nil {
-		return nil, fmt.Errorf("parse yaml: %w", err)
+	var programs map[string]ConfigSpec
+
+	// Try nested format first: {programs: {name: spec}}
+	var nested struct {
+		Programs map[string]ConfigSpec `yaml:"programs"`
+	}
+	if err := yaml.Unmarshal(data, &nested); err == nil && nested.Programs != nil {
+		programs = nested.Programs
+	} else {
+		// Fall back to flat format: {name: spec}
+		err = yaml.Unmarshal(data, &programs)
+		if err != nil {
+			return nil, fmt.Errorf("parse yaml: %w", err)
+		}
 	}
 
 	var specs []ConfigSpec
-	for name, spec := range raw {
-		// Expand instances
-		numprocs := spec.Numprocs
-		if numprocs <= 0 {
-			numprocs = 1
+	for name, spec := range programs {
+		// Set Program from map key if not already set
+		if spec.Program == "" {
+			spec.Program = name
 		}
-		for i := 0; i < numprocs; i++ {
+
+		// Apply default for Numprocs before validation
+		if spec.Numprocs <= 0 {
+			spec.Numprocs = 1
+		}
+
+		// Validate spec before expansion
+		if err := spec.Validate(); err != nil {
+			return nil, fmt.Errorf("validate spec %q: %w", name, err)
+		}
+
+		// Expand instances
+		for i := 0; i < spec.Numprocs; i++ {
 			instance := spec
 			instance.ProcessName = FormatInstanceName(name, i)
 			specs = append(specs, instance)
