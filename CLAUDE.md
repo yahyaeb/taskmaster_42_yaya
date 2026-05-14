@@ -102,9 +102,9 @@ Root:
   │       │   └── func slicesEqual
   │       ├── rpc.go (~200 lines)
   │       │   ├── type SocketListener
-  │       │   ├── func NewSocketListener / StartSocketListener
+  │       │   ├── func NewSocketListener / StartSocketListener (ProcessManager)
   │       │   ├── func (*SocketListener) serve / handleConn
-  │       │   ├── func HandleConnection / RouteRequest
+  │       │   ├── func HandleConnection / RouteRequest (ProcessManager)
   │       │   ├── handler registry (table-driven dispatch)
   │       │   └── handlers (handleStart, handleStop, etc.)
   │       └── *_test.go (none - e2e tests only)

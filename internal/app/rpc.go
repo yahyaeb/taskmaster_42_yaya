@@ -11,7 +11,7 @@ import (
 	"taskmaster/internal/protocol"
 )
 
-type HandlerFunc func(*Manager, map[string]any) (any, error)
+type HandlerFunc func(ProcessManager, map[string]any) (any, error)
 
 type handlerInfo struct {
 	fn        HandlerFunc
@@ -28,7 +28,7 @@ var handlers = map[string]handlerInfo{
 	"Shutdown":  {fn: handleShutdown, needsName: false, allowAll: false},
 }
 
-func HandleConnection(conn net.Conn, manager *Manager) {
+func HandleConnection(conn net.Conn, mgr ProcessManager) {
 	defer conn.Close()
 
 	decoder := json.NewDecoder(conn)
@@ -41,11 +41,11 @@ func HandleConnection(conn net.Conn, manager *Manager) {
 		return
 	}
 
-	resp := RouteRequest(&req, manager)
+	resp := RouteRequest(&req, mgr)
 	_ = encoder.Encode(resp)
 }
 
-func RouteRequest(req *protocol.RPCRequest, manager *Manager) *protocol.RPCResponse {
+func RouteRequest(req *protocol.RPCRequest, mgr ProcessManager) *protocol.RPCResponse {
 	if req.Method == "" {
 		return protocol.NewErrorResponse(protocol.InvalidRequest, "method is required", req.ID)
 	}
@@ -77,12 +77,12 @@ func RouteRequest(req *protocol.RPCRequest, manager *Manager) *protocol.RPCRespo
 		}
 
 		if name != "" && name != "all" && action != "GetStatus" {
-			if _, err := manager.GetProcessInfo(name); err != nil {
+			if _, err := mgr.GetProcessInfo(name); err != nil {
 				return protocol.NewErrorResponse(protocol.ProcessNotFound, err.Error(), req.ID)
 			}
 		}
 
-		result, err := info.fn(manager, params)
+		result, err := info.fn(mgr, params)
 		if err != nil {
 			return protocol.NewErrorResponse(protocol.OperationFailed, err.Error(), req.ID)
 		}
@@ -100,40 +100,40 @@ func withRecovery(fn func() *protocol.RPCResponse, id int) (resp *protocol.RPCRe
 	return fn()
 }
 
-func handleGetStatus(m *Manager, params map[string]any) (any, error) {
+func handleGetStatus(mgr ProcessManager, params map[string]any) (any, error) {
 	name, _ := params["name"].(string)
 	if name == "" || name == "all" {
-		return m.GetAllProcessInfo()
+		return mgr.GetAllProcessInfo()
 	}
-	return m.GetProcessInfo(name)
+	return mgr.GetProcessInfo(name)
 }
 
-func handleStart(m *Manager, params map[string]any) (any, error) {
+func handleStart(mgr ProcessManager, params map[string]any) (any, error) {
 	name, _ := params["name"].(string)
-	if err := m.Start(name); err != nil {
+	if err := mgr.Start(name); err != nil {
 		return nil, err
 	}
 	return protocol.ActionResponse{Success: true, Message: "process starting"}, nil
 }
 
-func handleStop(m *Manager, params map[string]any) (any, error) {
+func handleStop(mgr ProcessManager, params map[string]any) (any, error) {
 	name, _ := params["name"].(string)
-	if err := m.Stop(name); err != nil {
+	if err := mgr.Stop(name); err != nil {
 		return nil, err
 	}
 	return protocol.ActionResponse{Success: true, Message: "process stopping"}, nil
 }
 
-func handleRestart(m *Manager, params map[string]any) (any, error) {
+func handleRestart(mgr ProcessManager, params map[string]any) (any, error) {
 	name, _ := params["name"].(string)
-	if err := m.Restart(name); err != nil {
+	if err := mgr.Restart(name); err != nil {
 		return nil, err
 	}
 	return protocol.ActionResponse{Success: true, Message: "process restarting"}, nil
 }
 
-func handleReload(m *Manager, params map[string]any) (any, error) {
-	result, err := m.Reload()
+func handleReload(mgr ProcessManager, params map[string]any) (any, error) {
+	result, err := mgr.Reload()
 	if err != nil {
 		return nil, err
 	}
@@ -144,8 +144,8 @@ func handleReload(m *Manager, params map[string]any) (any, error) {
 	}, nil
 }
 
-func handleShutdown(m *Manager, params map[string]any) (any, error) {
-	if err := m.Shutdown(); err != nil {
+func handleShutdown(mgr ProcessManager, params map[string]any) (any, error) {
+	if err := mgr.Shutdown(); err != nil {
 		return nil, err
 	}
 	return protocol.ActionResponse{Success: true, Message: "Daemon shutting down..."}, nil
@@ -158,7 +158,7 @@ type SocketListener struct {
 	path     string
 }
 
-func NewSocketListener(path string, m *Manager) (*SocketListener, error) {
+func NewSocketListener(path string, mgr ProcessManager) (*SocketListener, error) {
 	_ = os.Remove(path)
 
 	l, err := net.Listen("unix", path)
@@ -178,12 +178,12 @@ func NewSocketListener(path string, m *Manager) (*SocketListener, error) {
 	}
 
 	sl.wg.Add(1)
-	go sl.serve(m)
+	go sl.serve(mgr)
 
 	return sl, nil
 }
 
-func (sl *SocketListener) serve(m *Manager) {
+func (sl *SocketListener) serve(mgr ProcessManager) {
 	defer sl.wg.Done()
 
 	for {
@@ -199,13 +199,13 @@ func (sl *SocketListener) serve(m *Manager) {
 		}
 
 		sl.wg.Add(1)
-		go sl.handleConn(conn, m)
+		go sl.handleConn(conn, mgr)
 	}
 }
 
-func (sl *SocketListener) handleConn(conn net.Conn, m *Manager) {
+func (sl *SocketListener) handleConn(conn net.Conn, mgr ProcessManager) {
 	defer sl.wg.Done()
-	HandleConnection(conn, m)
+	HandleConnection(conn, mgr)
 }
 
 func (sl *SocketListener) Stop() error {
@@ -219,6 +219,6 @@ func (sl *SocketListener) Addr() net.Addr {
 	return sl.listener.Addr()
 }
 
-func StartSocketListener(path string, m *Manager) (*SocketListener, error) {
-	return NewSocketListener(path, m)
+func StartSocketListener(path string, mgr ProcessManager) (*SocketListener, error) {
+	return NewSocketListener(path, mgr)
 }
