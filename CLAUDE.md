@@ -84,7 +84,9 @@ Root:
   │       │   ├── func (m *Manager) GetProcessInfo/GetAllProcessInfo
   │       │   ├── func (m *Manager) StopAll/Spawn
   │       │   ├── func NewManagerFromConfig
-  │       │   └── helpers (drainChStatus, handleStatusUpdate, isRunning, formatUptime, closeChannel)
+  │       │   ├── func (m *Manager) runStatusLoop (background goroutine)
+  │       │   ├── func (m *Manager) applyUpdate
+  │       │   └── helpers (isRunning, formatUptime, closeChannel)
   │       ├── watchdog.go (~200 lines)
   │       │   ├── func (m *Manager) Watchdog (goroutine loop per process)
   │       │   ├── func (m *Manager) Backoff

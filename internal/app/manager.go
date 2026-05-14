@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -69,6 +70,8 @@ type Manager struct {
 	ch           *ProcessChannels
 	shutdownFunc func()
 	configPath   string
+	statusCtx    context.Context
+	statusCancel context.CancelFunc
 }
 
 func NewManager() *Manager {
@@ -85,7 +88,12 @@ func (m *Manager) SetShutdownFunc(fn func()) {
 }
 
 func (m *Manager) SetChannels(ch *ProcessChannels) {
+	if m.statusCancel != nil {
+		m.statusCancel()
+	}
 	m.ch = ch
+	m.statusCtx, m.statusCancel = context.WithCancel(context.Background())
+	go m.runStatusLoop()
 }
 
 func (m *Manager) Channels() *ProcessChannels {
@@ -173,7 +181,6 @@ func (m *Manager) Stop(name string) error {
 	}
 	timeout := time.Now().Add(time.Duration(stoptime) * time.Second)
 	for time.Now().Before(timeout) {
-		m.drainChStatus()
 		m.mu.Lock()
 		if proc, ok := m.Process[name]; ok {
 			if proc.Status == bus.STOPPED || proc.Status == bus.FATAL {
@@ -250,6 +257,10 @@ func (m *Manager) Shutdown() error {
 		proc.Status = bus.STOPPED
 	}
 
+	if m.statusCancel != nil {
+		m.statusCancel()
+	}
+
 	shutdownFunc := m.shutdownFunc
 	m.mu.Unlock()
 
@@ -261,8 +272,6 @@ func (m *Manager) Shutdown() error {
 }
 
 func (m *Manager) GetProcessInfo(name string) (protocol.ProcessInfo, error) {
-	m.drainChStatus()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -281,8 +290,6 @@ func (m *Manager) GetProcessInfo(name string) (protocol.ProcessInfo, error) {
 }
 
 func (m *Manager) GetAllProcessInfo() ([]protocol.ProcessInfo, error) {
-	m.drainChStatus()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -430,21 +437,20 @@ func formatUptime(startTime time.Time) string {
 	return fmt.Sprintf("%ds", seconds)
 }
 
-func (m *Manager) drainChStatus() {
+func (m *Manager) runStatusLoop() {
 	for {
 		select {
 		case update := <-m.ch.Status:
-			m.handleStatusUpdate(update)
-		default:
+			m.mu.Lock()
+			m.applyUpdate(update)
+			m.mu.Unlock()
+		case <-m.statusCtx.Done():
 			return
 		}
 	}
 }
 
-func (m *Manager) handleStatusUpdate(update bus.ProcessUpdate) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+func (m *Manager) applyUpdate(update bus.ProcessUpdate) {
 	if proc, ok := m.Process[update.Name]; ok {
 		proc.Status = update.Status
 		if update.Pid > 0 {
