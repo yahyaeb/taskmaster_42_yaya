@@ -181,9 +181,8 @@ func (m *Manager) Stop(name string) error {
 		if sig == nil {
 			sig, _ = engine.SignalFromString("TERM")
 		}
-		stopper := engine.NewProcessStopper(m.handler, m.executor, time.Duration(m.Config[name].Stoptime)*time.Second, sig)
 		p := &engine.Process{PID: pid}
-		if err := stopper.Stop(p); err != nil {
+		if err := engine.StopProcess(m.handler, p, sig); err != nil {
 			slog.Error("error stopping program directly", "program", name, "error", err)
 		}
 	}
@@ -273,9 +272,8 @@ func (m *Manager) Shutdown() error {
 		}
 		if proc.Pid > 0 {
 			sig, _ := engine.SignalFromString("TERM")
-			stopper := engine.NewProcessStopper(m.handler, m.executor, 5*time.Second, sig)
 			p := &engine.Process{PID: proc.Pid}
-			if err := stopper.Stop(p); err != nil {
+			if err := engine.StopProcess(m.handler, p, sig); err != nil {
 				slog.Error("error stopping process during shutdown", "process", name, "error", err)
 			}
 		}

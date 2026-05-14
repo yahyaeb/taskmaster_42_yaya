@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"syscall"
-	"time"
 )
 
 type SignalHandler interface {
@@ -42,24 +41,8 @@ func SignalFromString(sig string) (os.Signal, error) {
 	}
 }
 
-type ProcessStopper struct {
-	handler    SignalHandler
-	executor   ProcessExecutor
-	timeout    time.Duration
-	stopsignal os.Signal
-}
-
-func NewProcessStopper(handler SignalHandler, executor ProcessExecutor, timeout time.Duration, sig os.Signal) *ProcessStopper {
-	return &ProcessStopper{
-		handler:    handler,
-		executor:   executor,
-		timeout:    timeout,
-		stopsignal: sig,
-	}
-}
-
-func (ps *ProcessStopper) Stop(p *Process) error {
-	if err := ps.handler.Send(p, ps.stopsignal); err != nil {
+func StopProcess(handler SignalHandler, p *Process, sig os.Signal) error {
+	if err := handler.Send(p, sig); err != nil {
 		return fmt.Errorf("failed to send signal: %w", err)
 	}
 	return nil

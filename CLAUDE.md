@@ -27,7 +27,7 @@ Root:
   │   │   │   ├── type SignalHandler (interface)
   │   │   │   ├── type OSSignalHandler
   │   │   │   ├── func SignalFromString
-  │   │   │   └── type ProcessStopper
+  │   │   │   └── func StopProcess
   │   │   ├── lifecycle.go (~130 lines)
   │   │   │   ├── type ProcessWatcher
   │   │   │   ├── func NewProcessWatcher
