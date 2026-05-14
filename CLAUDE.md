@@ -70,7 +70,7 @@ Root:
   │   │       ├── func NewErrorResponse
   │   │       └── func NewSuccessResponse
   │   └── app/
-  │       ├── core.go (~600 lines)
+  │       ├── manager.go (~280 lines)
   │       │   ├── type ProcessChannels
   │       │   ├── type ReloadResult
   │       │   ├── type ProcessManager (interface)
@@ -82,9 +82,19 @@ Root:
   │       │   ├── func NewManager
   │       │   ├── func (m *Manager) Start/Stop/Restart/Reload/Shutdown
   │       │   ├── func (m *Manager) GetProcessInfo/GetAllProcessInfo
-  │       │   ├── func (m *Manager) Watchdog (runs in goroutine per process)
+  │       │   ├── func (m *Manager) StopAll/Spawn
+  │       │   ├── func NewManagerFromConfig
+  │       │   └── helpers (drainChStatus, handleStatusUpdate, isRunning, formatUptime, closeChannel)
+  │       ├── watchdog.go (~200 lines)
+  │       │   ├── func (m *Manager) Watchdog (goroutine loop per process)
+  │       │   ├── func (m *Manager) Backoff
+  │       │   ├── func (m *Manager) startProcess/stopProcess/waitForExit
+  │       │   ├── func (m *Manager) evaluateResult/runAttempt
+  │       │   └── helpers (validateWatchdog, resolveMaxRetries, isStopped, resolvePid)
+  │       ├── config_diff.go (~80 lines)
   │       │   ├── func (m *Manager) applyConfigDiff
-  │       │   └── helpers (formatUptime, closeChannel, slicesEqual)
+  │       │   ├── func configChanged
+  │       │   └── func slicesEqual
   │       ├── rpc.go (~200 lines)
   │       │   ├── type SocketListener
   │       │   ├── func NewSocketListener / StartSocketListener

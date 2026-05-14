@@ -63,3 +63,9 @@ repomix-output.xml
 *.bin
 .cursor/
 .claude/
+
+# Developer
+taskmaster_42.md
+taskmaster42.md
+yel-bouk.md
+goland/
