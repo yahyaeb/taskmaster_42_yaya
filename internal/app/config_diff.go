@@ -36,7 +36,7 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 				m.Process[name] = newProcessInstance(newSpec.Autostart)
 			}
 			if newSpec.Autostart {
-				go m.Watchdog(newSpec, m.Process[name])
+				m.startWatchdog(newSpec, m.Process[name])
 			}
 		} else if configChanged(oldSpec, newSpec) {
 			result.Restarted = append(result.Restarted, name)
@@ -46,7 +46,7 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 				m.ch.CloseSupervisorStop(name)
 			}
 			if newSpec.Autostart {
-				go m.Watchdog(newSpec, m.Process[name])
+				m.startWatchdog(newSpec, m.Process[name])
 			}
 		}
 	}

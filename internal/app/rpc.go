@@ -199,11 +199,13 @@ func (sl *SocketListener) serve(m *Manager) {
 		}
 
 		sl.wg.Add(1)
-		go func() {
-			defer sl.wg.Done()
-			HandleConnection(conn, m)
-		}()
+		go sl.handleConn(conn, m)
 	}
+}
+
+func (sl *SocketListener) handleConn(conn net.Conn, m *Manager) {
+	defer sl.wg.Done()
+	HandleConnection(conn, m)
 }
 
 func (sl *SocketListener) Stop() error {

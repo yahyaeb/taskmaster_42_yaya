@@ -216,6 +216,12 @@ func (m *Manager) launchAndWait(
 	return m.evaluateExit(setting, updates, exitCode, err, attempt)
 }
 
+// startWatchdog launches Watchdog in a new goroutine.
+func (m *Manager) startWatchdog(spec *config.ConfigSpec, proc *ProcessInstance) {
+	go m.Watchdog(spec, proc)
+	slog.Info("watchdog started", "name", spec.ProcessName)
+}
+
 func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 	if err := m.validateWatchdog(setting, proc); err != nil {
 		return

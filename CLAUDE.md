@@ -30,7 +30,9 @@ Root:
   │   │   │   └── func StopProcess
   │   │   ├── lifecycle.go (~130 lines)
   │   │   │   ├── type ProcessWatcher
-  │   │   │   ├── func NewProcessWatcher
+  │   │   │   ├── func Executor
+  │   │   │   ├── func watchForEarlyExit
+  │   │   │   ├── func (*ProcessWatcher) Run
   │   │   │   ├── func ShouldRestart
   │   │   └── func procState
   │   │   └── *_test.go (none)
@@ -89,11 +91,11 @@ Root:
   │       │   ├── func (m *Manager) applyUpdate
   │       │   └── helpers (isRunning, formatUptime, closeChannel)
   │       ├── watchdog.go (~200 lines)
+  │       │   ├── func (m *Manager) startWatchdog
   │       │   ├── func (m *Manager) Watchdog (goroutine loop per process)
-  │       │   ├── func (m *Manager) Backoff
-  │       │   ├── func (m *Manager) startProcess/stopProcess/waitForExit
-  │       │   ├── func (m *Manager) evaluateResult/runAttempt
-  │       │   └── helpers (validateWatchdog, resolveMaxRetries, isStopped, resolvePid)
+  │       │   ├── func (m *Manager) spawnRun/killProcess/waitForExit
+  │       │   ├── func (m *Manager) launchAndWait/evaluateExit
+  │       │   └── helpers (validateWatchdog, resolveMaxRetries, isStopped, pidAfterStart)
   │       ├── config_diff.go (~80 lines)
   │       │   ├── func (m *Manager) applyConfigDiff
   │       │   ├── func configChanged
@@ -101,6 +103,7 @@ Root:
   │       ├── rpc.go (~200 lines)
   │       │   ├── type SocketListener
   │       │   ├── func NewSocketListener / StartSocketListener
+  │       │   ├── func (*SocketListener) serve / handleConn
   │       │   ├── func HandleConnection / RouteRequest
   │       │   ├── handler registry (table-driven dispatch)
   │       │   └── handlers (handleStart, handleStop, etc.)

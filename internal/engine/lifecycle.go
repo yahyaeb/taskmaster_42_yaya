@@ -34,6 +34,28 @@ func Executor(executor ProcessExecutor) *ProcessWatcher {
 	return &ProcessWatcher{Executor: executor}
 }
 
+// watchForEarlyExit polls /proc until the process is a zombie, done closes, or ctx is canceled.
+// It signals earlyExit at most once when the process appears dead before starttime elapses.
+func watchForEarlyExit(ctx context.Context, pid int, earlyExit chan struct{}, done <-chan struct{}) {
+	var once sync.Once
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			state, err := procState(pid)
+			if err != nil || state == 'Z' {
+				once.Do(func() { close(earlyExit) })
+				return
+			}
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updates chan<- bus.ProcessUpdate, pidChan chan<- int) (ExitCode, error) {
 	process, err := pw.Executor.Start(ctx, spec)
 	if err != nil {
@@ -65,27 +87,9 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 	if starttime > 0 {
 		timer := time.NewTimer(starttime)
 		earlyExit := make(chan struct{})
-		var earlyExitOnce sync.Once
 		done := make(chan struct{})
 
-		go func() {
-			ticker := time.NewTicker(100 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					state, err := procState(process.PID)
-					if err != nil || state == 'Z' {
-						earlyExitOnce.Do(func() { close(earlyExit) })
-						return
-					}
-				case <-done:
-					return
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
+		go watchForEarlyExit(ctx, process.PID, earlyExit, done)
 
 		select {
 		case <-earlyExit:

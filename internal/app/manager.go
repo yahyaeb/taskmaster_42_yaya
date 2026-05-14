@@ -203,7 +203,7 @@ func (m *Manager) Start(name string) error {
 	}
 
 	m.Process[name].Status = bus.STARTING
-	go m.Watchdog(configSpec, m.Process[name])
+	m.startWatchdog(configSpec, m.Process[name])
 
 	slog.Info("Start requested", "name", name)
 	return nil
@@ -445,7 +445,7 @@ func (curr *Manager) Spawn(prev *Manager) {
 		found := slices.Contains(prevKeys, name)
 
 		if !found {
-			go curr.Watchdog(setting, curr.Process[name])
+			curr.startWatchdog(setting, curr.Process[name])
 			slog.Info("started new program", "name", setting.ProcessName)
 		}
 	}
