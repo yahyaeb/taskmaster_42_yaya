@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,12 +20,7 @@ func ShouldRestart(autorestart string, exitCode int, exitcodes []int) bool {
 	case "never":
 		return false
 	case "unexpected":
-		for _, expected := range exitcodes {
-			if exitCode == expected {
-				return false
-			}
-		}
-		return true
+		return !slices.Contains(exitcodes, exitCode)
 	default:
 		return false
 	}
@@ -34,11 +30,11 @@ type ProcessWatcher struct {
 	Executor ProcessExecutor
 }
 
-func NewProcessWatcher(executor ProcessExecutor) *ProcessWatcher {
+func Executor(executor ProcessExecutor) *ProcessWatcher {
 	return &ProcessWatcher{Executor: executor}
 }
 
-func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updates chan<- bus.ProcessUpdate) (ExitCode, error) {
+func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updates chan<- bus.ProcessUpdate, pidChan chan<- int) (ExitCode, error) {
 	process, err := pw.Executor.Start(ctx, spec)
 	if err != nil {
 		updates <- bus.ProcessUpdate{
@@ -46,6 +42,14 @@ func (pw *ProcessWatcher) Run(ctx context.Context, spec config.ConfigSpec, updat
 			Status: bus.FATAL,
 		}
 		return 0, fmt.Errorf("spawn failed: %w", err)
+	}
+
+	// publish PID immediately to caller if provided (non-blocking send)
+	if pidChan != nil {
+		select {
+		case pidChan <- process.PID:
+		default:
+		}
 	}
 
 	updates <- bus.ProcessUpdate{
