@@ -51,6 +51,7 @@ type ProcessInstance struct {
 	RetryCount int
 	LastStart  time.Time
 	Intended   bool
+	Stopped    chan struct{}
 }
 
 func newProcessInstance(autostart bool) *ProcessInstance {
@@ -58,6 +59,7 @@ func newProcessInstance(autostart bool) *ProcessInstance {
 		Status:     bus.STOPPED,
 		Intended:   autostart,
 		RetryCount: 0,
+		Stopped:    make(chan struct{}, 1),
 	}
 }
 
@@ -179,20 +181,30 @@ func (m *Manager) Stop(name string) error {
 	if spec, ok := m.Config[name]; ok {
 		stoptime = spec.Stoptime + 2
 	}
-	timeout := time.Now().Add(time.Duration(stoptime) * time.Second)
-	for time.Now().Before(timeout) {
-		m.mu.Lock()
-		if proc, ok := m.Process[name]; ok {
-			if proc.Status == bus.STOPPED || proc.Status == bus.FATAL {
-				m.mu.Unlock()
-				return nil
-			}
-		}
-		m.mu.Unlock()
-		time.Sleep(50 * time.Millisecond)
+
+	proc, ok := m.Process[name]
+	if !ok {
+		return nil
 	}
 
-	return fmt.Errorf("timeout waiting for process to stop")
+	// Drain stale notification from previous stop cycle
+	select {
+	case <-proc.Stopped:
+	default:
+	}
+
+	// Check if already stopped
+	if proc.Status == bus.STOPPED || proc.Status == bus.FATAL {
+		return nil
+	}
+
+	// Wait for stop notification with timeout
+	select {
+	case <-proc.Stopped:
+		return nil
+	case <-time.After(time.Duration(stoptime) * time.Second):
+		return fmt.Errorf("timeout waiting for process to stop")
+	}
 }
 
 func (m *Manager) Restart(name string) error {
@@ -461,6 +473,13 @@ func (m *Manager) applyUpdate(update bus.ProcessUpdate) {
 		}
 		if !update.LastStart.IsZero() {
 			proc.LastStart = update.LastStart
+		}
+		// Notify waiters when process reaches terminal state
+		if update.Status == bus.STOPPED || update.Status == bus.FATAL {
+			select {
+			case proc.Stopped <- struct{}{}:
+			default:
+			}
 		}
 	}
 }

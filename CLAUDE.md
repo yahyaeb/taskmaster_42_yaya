@@ -75,6 +75,7 @@ Root:
   │       │   ├── type ReloadResult
   │       │   ├── type ProcessManager (interface)
   │       │   ├── type ProcessInstance
+  │       │   │   ├── Stopped chan struct{} (per-process notification)
   │       │   ├── type Manager
   │       │   │   ├── mu sync.Mutex (protects all state)
   │       │   │   ├── Config map[string]*config.ConfigSpec
