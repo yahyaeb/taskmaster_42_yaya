@@ -15,7 +15,7 @@ import (
 	"taskmaster/internal/engine"
 )
 
-func (m *Manager) Backoff(setting *config.ConfigSpec, stop chan struct{}, updates chan bus.ProcessUpdate, attempt int) error {
+func (m *Manager) notifyRetry(setting *config.ConfigSpec, stop chan struct{}, updates chan<- bus.ProcessUpdate, attempt int) error {
 	updates <- bus.ProcessUpdate{
 		Name:       setting.ProcessName,
 		Status:     bus.BACKOFF,
@@ -47,12 +47,12 @@ func (m *Manager) validateWatchdog(setting *config.ConfigSpec, proc *ProcessInst
 	}
 	if len(strings.Fields(setting.Cmd)) == 0 {
 		slog.Error("no command specified", "program", setting.Program)
-		m.ch.Status <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
+		m.ch.PublishStatus(bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL})
 		return errors.New("no command")
 	}
 	if proc == nil {
 		slog.Error("ProcessInstance not found", "process", setting.ProcessName)
-		m.ch.Status <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL}
+		m.ch.PublishStatus(bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.FATAL})
 		return errors.New("nil process")
 	}
 	return nil
@@ -80,7 +80,7 @@ func isStopped(stop chan struct{}) bool {
 func (m *Manager) spawnRun(
 	ctx context.Context,
 	setting *config.ConfigSpec,
-	updates chan bus.ProcessUpdate,
+	updates chan<- bus.ProcessUpdate,
 ) (chan engine.ExitCode, chan error, chan int) {
 	resultCh := make(chan engine.ExitCode, 1)
 	errCh := make(chan error, 1)
@@ -162,7 +162,7 @@ func (m *Manager) killProcess(
 // evaluateExit decides whether to restart, stop, or fatal based on exit
 func (m *Manager) evaluateExit(
 	setting *config.ConfigSpec,
-	updates chan bus.ProcessUpdate,
+	updates chan<- bus.ProcessUpdate,
 	exitCode engine.ExitCode,
 	err error,
 	attempt int,
@@ -193,7 +193,7 @@ func (m *Manager) evaluateExit(
 func (m *Manager) launchAndWait(
 	setting *config.ConfigSpec,
 	stop chan struct{},
-	updates chan bus.ProcessUpdate,
+	updates chan<- bus.ProcessUpdate,
 	attempt int,
 ) (bool, bool, engine.ExitCode) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -221,9 +221,9 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 		return
 	}
 
-	stopCh := m.ch.Stop[setting.ProcessName]
+	stopCh := m.ch.EnsureSupervisorStop(setting.ProcessName)
 	stop := stopCh.C()
-	updates := m.ch.Status
+	updates := m.ch.StatusPublisher()
 
 	maxRetries := resolveMaxRetries(setting)
 
@@ -233,7 +233,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 			return
 		}
 
-		if err := m.Backoff(setting, stop, updates, attempt); err != nil {
+		if err := m.notifyRetry(setting, stop, updates, attempt); err != nil {
 			return
 		}
 

@@ -28,16 +28,82 @@ func (s *stopChan) C() chan struct{} {
 	return s.ch
 }
 
+// ProcessChannels carries supervisor stop coordination and status broadcasts.
+// All access to the stop map goes through methods guarded by an internal mutex.
 type ProcessChannels struct {
-	Status chan bus.ProcessUpdate
-	Stop   map[string]*stopChan
+	mu     sync.Mutex
+	status chan bus.ProcessUpdate
+	stop   map[string]*stopChan
 }
 
 func NewProcessChannels() *ProcessChannels {
 	return &ProcessChannels{
-		Status: make(chan bus.ProcessUpdate, 100),
-		Stop:   make(map[string]*stopChan),
+		status: make(chan bus.ProcessUpdate, 100),
+		stop:   make(map[string]*stopChan),
 	}
+}
+
+// PublishStatus sends one status update to subscribers (non-blocking on buffer capacity only).
+func (pc *ProcessChannels) PublishStatus(u bus.ProcessUpdate) {
+	pc.status <- u
+}
+
+// StatusPublisher returns the send side for APIs that require a channel (e.g. engine.Run).
+func (pc *ProcessChannels) StatusPublisher() chan<- bus.ProcessUpdate {
+	return pc.status
+}
+
+// StatusUpdates returns the receive side for the manager status loop.
+func (pc *ProcessChannels) StatusUpdates() <-chan bus.ProcessUpdate {
+	return pc.status
+}
+
+// EnsureSupervisorStop returns the stop channel for name, allocating it if missing.
+func (pc *ProcessChannels) EnsureSupervisorStop(name string) *stopChan {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	sc := pc.stop[name]
+	if sc == nil {
+		sc = &stopChan{ch: make(chan struct{})}
+		pc.stop[name] = sc
+	}
+	return sc
+}
+
+// HasSupervisorStop reports whether a supervision slot exists for name.
+func (pc *ProcessChannels) HasSupervisorStop(name string) bool {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	_, ok := pc.stop[name]
+	return ok
+}
+
+// CloseSupervisorStop closes stop signaling for name and removes it from the map.
+func (pc *ProcessChannels) CloseSupervisorStop(name string) bool {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	sc, ok := pc.stop[name]
+	if !ok {
+		return false
+	}
+	sc.close()
+	delete(pc.stop, name)
+	return true
+}
+
+// CloseAllSupervisorStops closes every supervision slot and clears the map.
+func (pc *ProcessChannels) CloseAllSupervisorStops() []string {
+	pc.mu.Lock()
+	defer pc.mu.Unlock()
+	names := make([]string, 0, len(pc.stop))
+	for name, sc := range pc.stop {
+		if sc != nil {
+			sc.close()
+		}
+		names = append(names, name)
+	}
+	clear(pc.stop)
+	return names
 }
 
 type ReloadResult struct {
@@ -132,10 +198,6 @@ func (m *Manager) Start(name string) error {
 		return nil
 	}
 
-	if _, ok := m.ch.Stop[name]; !ok {
-		m.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
-	}
-
 	if _, ok := m.Process[name]; !ok {
 		m.Process[name] = newProcessInstance(true)
 	}
@@ -161,8 +223,7 @@ func (m *Manager) Stop(name string) error {
 		return fmt.Errorf("process not found: %s", name)
 	}
 
-	stopChan, running := m.ch.Stop[name]
-	if !running {
+	if !m.ch.CloseSupervisorStop(name) {
 		m.mu.Unlock()
 		return nil
 	}
@@ -172,8 +233,6 @@ func (m *Manager) Stop(name string) error {
 		pid = proc.Pid
 	}
 
-	stopChan.close()
-	delete(m.ch.Stop, name)
 	m.mu.Unlock()
 
 	if pid > 0 {
@@ -265,10 +324,7 @@ func (m *Manager) Shutdown() error {
 
 	for name, proc := range m.Process {
 		if m.ch != nil {
-			if stopCh, ok := m.ch.Stop[name]; ok {
-				stopCh.close()
-				delete(m.ch.Stop, name)
-			}
+			m.ch.CloseSupervisorStop(name)
 		}
 		if proc.Pid > 0 {
 			sig, _ := engine.SignalFromString("TERM")
@@ -338,12 +394,8 @@ func (m *Manager) StopAll() {
 		return
 	}
 
-	for name, stopCh := range m.ch.Stop {
-		if stopCh != nil {
-			stopCh.close()
-			delete(m.ch.Stop, name)
-			slog.Info("stopped program", "name", name)
-		}
+	for _, name := range m.ch.CloseAllSupervisorStops() {
+		slog.Info("stopped program", "name", name)
 	}
 	m.mu.Unlock()
 
@@ -393,9 +445,6 @@ func (curr *Manager) Spawn(prev *Manager) {
 		found := slices.Contains(prevKeys, name)
 
 		if !found {
-			if _, ok := curr.ch.Stop[name]; !ok {
-				curr.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
-			}
 			go curr.Watchdog(setting, curr.Process[name])
 			slog.Info("started new program", "name", setting.ProcessName)
 		}
@@ -403,10 +452,7 @@ func (curr *Manager) Spawn(prev *Manager) {
 
 	for _, prevName := range prevKeys {
 		if _, exists := curr.Config[prevName]; !exists {
-			if stopChan, ok := curr.ch.Stop[prevName]; ok {
-				stopChan.close()
-				delete(curr.ch.Stop, prevName)
-			}
+			curr.ch.CloseSupervisorStop(prevName)
 			slog.Info("stopped removed program", "name", prevName)
 		}
 	}
@@ -454,7 +500,7 @@ func formatUptime(startTime time.Time) string {
 func (m *Manager) runStatusLoop() {
 	for {
 		select {
-		case update := <-m.ch.Status:
+		case update := <-m.ch.StatusUpdates():
 			m.mu.Lock()
 			m.applyUpdate(update)
 			m.mu.Unlock()
@@ -490,6 +536,5 @@ func (m *Manager) isRunning(name string) bool {
 	if m.ch == nil {
 		return false
 	}
-	_, exists := m.ch.Stop[name]
-	return exists
+	return m.ch.HasSupervisorStop(name)
 }

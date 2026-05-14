@@ -36,9 +36,6 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 				m.Process[name] = newProcessInstance(newSpec.Autostart)
 			}
 			if newSpec.Autostart {
-				if _, ok := m.ch.Stop[name]; !ok {
-					m.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
-				}
 				go m.Watchdog(newSpec, m.Process[name])
 			}
 		} else if configChanged(oldSpec, newSpec) {
@@ -46,25 +43,16 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 			m.Config[name] = newSpec
 			wasRunning := m.isRunning(name)
 			if wasRunning {
-				if stopCh, ok := m.ch.Stop[name]; ok {
-					stopCh.close()
-					delete(m.ch.Stop, name)
-				}
+				m.ch.CloseSupervisorStop(name)
 			}
 			if newSpec.Autostart {
-				if _, ok := m.ch.Stop[name]; !ok {
-					m.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
-				}
 				go m.Watchdog(newSpec, m.Process[name])
 			}
 		}
 	}
 
 	for _, name := range result.Removed {
-		if stopCh, ok := m.ch.Stop[name]; ok {
-			stopCh.close()
-			delete(m.ch.Stop, name)
-		}
+		m.ch.CloseSupervisorStop(name)
 		delete(m.Config, name)
 		if proc, ok := m.Process[name]; ok {
 			proc.Status = bus.STOPPED
