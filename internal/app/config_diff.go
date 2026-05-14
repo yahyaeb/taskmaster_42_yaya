@@ -37,7 +37,7 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 			}
 			if newSpec.Autostart {
 				if _, ok := m.ch.Stop[name]; !ok {
-					m.ch.Stop[name] = make(chan struct{})
+					m.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
 				}
 				go m.Watchdog(newSpec, m.Process[name])
 			}
@@ -47,13 +47,13 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 			wasRunning := m.isRunning(name)
 			if wasRunning {
 				if stopCh, ok := m.ch.Stop[name]; ok {
-					closeChannel(stopCh)
+					stopCh.close()
 					delete(m.ch.Stop, name)
 				}
 			}
 			if newSpec.Autostart {
 				if _, ok := m.ch.Stop[name]; !ok {
-					m.ch.Stop[name] = make(chan struct{})
+					m.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
 				}
 				go m.Watchdog(newSpec, m.Process[name])
 			}
@@ -62,7 +62,7 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 
 	for _, name := range result.Removed {
 		if stopCh, ok := m.ch.Stop[name]; ok {
-			closeChannel(stopCh)
+			stopCh.close()
 			delete(m.ch.Stop, name)
 		}
 		delete(m.Config, name)

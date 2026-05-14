@@ -15,15 +15,28 @@ import (
 	"taskmaster/internal/protocol"
 )
 
+type stopChan struct {
+	once sync.Once
+	ch   chan struct{}
+}
+
+func (s *stopChan) close() {
+	s.once.Do(func() { close(s.ch) })
+}
+
+func (s *stopChan) C() chan struct{} {
+	return s.ch
+}
+
 type ProcessChannels struct {
 	Status chan bus.ProcessUpdate
-	Stop   map[string]chan struct{}
+	Stop   map[string]*stopChan
 }
 
 func NewProcessChannels() *ProcessChannels {
 	return &ProcessChannels{
 		Status: make(chan bus.ProcessUpdate, 100),
-		Stop:   make(map[string]chan struct{}),
+		Stop:   make(map[string]*stopChan),
 	}
 }
 
@@ -120,7 +133,7 @@ func (m *Manager) Start(name string) error {
 	}
 
 	if _, ok := m.ch.Stop[name]; !ok {
-		m.ch.Stop[name] = make(chan struct{})
+		m.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
 	}
 
 	if _, ok := m.Process[name]; !ok {
@@ -159,7 +172,7 @@ func (m *Manager) Stop(name string) error {
 		pid = proc.Pid
 	}
 
-	closeChannel(stopChan)
+	stopChan.close()
 	delete(m.ch.Stop, name)
 	m.mu.Unlock()
 
@@ -254,7 +267,7 @@ func (m *Manager) Shutdown() error {
 	for name, proc := range m.Process {
 		if m.ch != nil {
 			if stopCh, ok := m.ch.Stop[name]; ok {
-				closeChannel(stopCh)
+				stopCh.close()
 				delete(m.ch.Stop, name)
 			}
 		}
@@ -329,7 +342,7 @@ func (m *Manager) StopAll() {
 
 	for name, stopCh := range m.ch.Stop {
 		if stopCh != nil {
-			closeChannel(stopCh)
+			stopCh.close()
 			delete(m.ch.Stop, name)
 			slog.Info("stopped program", "name", name)
 		}
@@ -383,7 +396,7 @@ func (curr *Manager) Spawn(prev *Manager) {
 
 		if !found {
 			if _, ok := curr.ch.Stop[name]; !ok {
-				curr.ch.Stop[name] = make(chan struct{})
+				curr.ch.Stop[name] = &stopChan{ch: make(chan struct{})}
 			}
 			go curr.Watchdog(setting, curr.Process[name])
 			slog.Info("started new program", "name", setting.ProcessName)
@@ -393,7 +406,7 @@ func (curr *Manager) Spawn(prev *Manager) {
 	for _, prevName := range prevKeys {
 		if _, exists := curr.Config[prevName]; !exists {
 			if stopChan, ok := curr.ch.Stop[prevName]; ok {
-				close(stopChan)
+				stopChan.close()
 				delete(curr.ch.Stop, prevName)
 			}
 			slog.Info("stopped removed program", "name", prevName)
@@ -420,15 +433,6 @@ func NewManagerFromConfig(path string) (*Manager, error) {
 	}
 
 	return manager, nil
-}
-
-func closeChannel(ch chan struct{}) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Debug("channel already closed", "reason", r)
-		}
-	}()
-	close(ch)
 }
 
 func formatUptime(startTime time.Time) string {

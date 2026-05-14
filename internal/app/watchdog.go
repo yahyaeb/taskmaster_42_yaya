@@ -221,7 +221,9 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 		return
 	}
 
-	stop, updates := m.ch.Stop[setting.ProcessName], m.ch.Status
+	stopCh := m.ch.Stop[setting.ProcessName]
+	stop := stopCh.C()
+	updates := m.ch.Status
 
 	maxRetries := resolveMaxRetries(setting)
 
