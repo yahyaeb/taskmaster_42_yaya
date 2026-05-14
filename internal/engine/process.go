@@ -35,20 +35,9 @@ func NewOsProcessExecutor() *OsProcessExecutor {
 
 func (e *OsProcessExecutor) Start(ctx context.Context, spec config.ConfigSpec) (*Process, error) {
 	builder := &CommandBuilder{}
-	cmd, err := builder.BuildCommand(spec)
+	cmd, err := builder.BuildCommand(ctx, spec)
 	if err != nil {
 		return nil, fmt.Errorf("build command failed: %w", err)
-	}
-
-	if ctx != nil {
-		newCmd := exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
-		newCmd.Dir = cmd.Dir
-		newCmd.Env = cmd.Env
-		newCmd.Stdin = cmd.Stdin
-		newCmd.Stdout = cmd.Stdout
-		newCmd.Stderr = cmd.Stderr
-		newCmd.ExtraFiles = cmd.ExtraFiles
-		cmd = newCmd
 	}
 
 	oldMask := syscall.Umask(spec.Umask)
@@ -140,13 +129,17 @@ func (e *OsProcessExecutor) closeFiles(cmd *exec.Cmd) {
 
 type CommandBuilder struct{}
 
-func (cb *CommandBuilder) BuildCommand(spec config.ConfigSpec) (*exec.Cmd, error) {
+func (cb *CommandBuilder) BuildCommand(ctx context.Context, spec config.ConfigSpec) (*exec.Cmd, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	parts := strings.Fields(spec.Cmd)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("no command specified")
 	}
 
-	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 
 	if spec.Workingdir != "" {
 		cmd.Dir = spec.Workingdir

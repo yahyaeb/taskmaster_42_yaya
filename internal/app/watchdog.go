@@ -76,8 +76,8 @@ func isStopped(stop chan struct{}) bool {
 	}
 }
 
-// startProcess launches the process in a goroutine
-func (m *Manager) startProcess(
+// spawnRun launches the process in a goroutine
+func (m *Manager) spawnRun(
 	ctx context.Context,
 	setting *config.ConfigSpec,
 	updates chan bus.ProcessUpdate,
@@ -121,8 +121,8 @@ func (m *Manager) waitForExit(
 	}
 }
 
-// resolvePid gets PID from channel or process map
-func (m *Manager) resolvePid(setting *config.ConfigSpec, pidCh chan int) int {
+// pidAfterStart gets PID from channel or process map
+func (m *Manager) pidAfterStart(setting *config.ConfigSpec, pidCh chan int) int {
 	select {
 	case pid := <-pidCh:
 		return pid
@@ -134,14 +134,14 @@ func (m *Manager) resolvePid(setting *config.ConfigSpec, pidCh chan int) int {
 	return 0
 }
 
-// stopProcess sends stop signal and waits for process to exit
-func (m *Manager) stopProcess(
+// killProcess sends stop signal and waits for process to exit
+func (m *Manager) killProcess(
 	setting *config.ConfigSpec,
 	pidCh chan int,
 	resultCh chan engine.ExitCode,
 	errCh chan error,
 ) {
-	pid := m.resolvePid(setting, pidCh)
+	pid := m.pidAfterStart(setting, pidCh)
 	if pid == 0 {
 		return
 	}
@@ -159,8 +159,8 @@ func (m *Manager) stopProcess(
 	m.waitForExit(setting, p, resultCh, errCh)
 }
 
-// evaluateResult decides whether to restart, stop, or fatal based on exit
-func (m *Manager) evaluateResult(
+// evaluateExit decides whether to restart, stop, or fatal based on exit
+func (m *Manager) evaluateExit(
 	setting *config.ConfigSpec,
 	updates chan bus.ProcessUpdate,
 	exitCode engine.ExitCode,
@@ -189,8 +189,8 @@ func (m *Manager) evaluateResult(
 	return false, false, exitCode
 }
 
-// runAttempt runs a single process attempt and returns (done, shouldReturn)
-func (m *Manager) runAttempt(
+// launchAndWait runs a single process attempt and returns (done, shouldReturn)
+func (m *Manager) launchAndWait(
 	setting *config.ConfigSpec,
 	stop chan struct{},
 	updates chan bus.ProcessUpdate,
@@ -199,13 +199,13 @@ func (m *Manager) runAttempt(
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	resultCh, errCh, pidCh := m.startProcess(ctx, setting, updates)
+	resultCh, errCh, pidCh := m.spawnRun(ctx, setting, updates)
 	var exitCode engine.ExitCode
 	var err error
 
 	select {
 	case <-stop:
-		m.stopProcess(setting, pidCh, resultCh, errCh)
+		m.killProcess(setting, pidCh, resultCh, errCh)
 		updates <- bus.ProcessUpdate{Name: setting.ProcessName, Status: bus.STOPPED}
 		return true, true, exitCode
 
@@ -213,7 +213,7 @@ func (m *Manager) runAttempt(
 	case err = <-errCh:
 	}
 
-	return m.evaluateResult(setting, updates, exitCode, err, attempt)
+	return m.evaluateExit(setting, updates, exitCode, err, attempt)
 }
 
 func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
@@ -237,7 +237,7 @@ func (m *Manager) Watchdog(setting *config.ConfigSpec, proc *ProcessInstance) {
 			return
 		}
 
-		done, shouldReturn, exitCode := m.runAttempt(setting, stop, updates, attempt)
+		done, shouldReturn, exitCode := m.launchAndWait(setting, stop, updates, attempt)
 		if shouldReturn {
 			return
 		}
