@@ -31,15 +31,15 @@ type Loader interface {
 func (c *ConfigSpec) Validate() error {
 	// Identity slice: mandatory fields
 	if c.Program == "" {
-		return fmt.Errorf("Program must not be empty")
+		return fmt.Errorf("program must not be empty")
 	}
 
 	if c.Cmd == "" {
-		return fmt.Errorf("Cmd must not be empty")
+		return fmt.Errorf("cmd must not be empty")
 	}
 
 	if c.Numprocs < 1 {
-		return fmt.Errorf("Numprocs must be >= 1, got %d", c.Numprocs)
+		return fmt.Errorf("numprocs must be >= 1, got %d", c.Numprocs)
 	}
 
 	// Control slice: signals + timeouts
@@ -49,21 +49,21 @@ func (c *ConfigSpec) Validate() error {
 	}
 
 	if c.Stopsignal != "" && !validSignals[c.Stopsignal] {
-		return fmt.Errorf("Stopsignal must be one of: TERM, HUP, INT, QUIT, KILL, USR1, USR2, got %q", c.Stopsignal)
+		return fmt.Errorf("stopsignal must be one of: TERM, HUP, INT, QUIT, KILL, USR1, USR2, got %q", c.Stopsignal)
 	}
 
 	if c.Stoptime < 0 {
-		return fmt.Errorf("Stoptime must be >= 0, got %d", c.Stoptime)
+		return fmt.Errorf("stoptime must be >= 0, got %d", c.Stoptime)
 	}
 
 	if c.Starttime < 0 {
-		return fmt.Errorf("Starttime must be >= 0, got %d", c.Starttime)
+		return fmt.Errorf("starttime must be >= 0, got %d", c.Starttime)
 	}
 
 	// Context slice: execution environment (all optional, empty values skipped)
 	// Only validate Umask always; others only if non-empty (provided)
 	if c.Umask < 0 || c.Umask > 0o777 {
-		return fmt.Errorf("Umask must be between 0 and 0o777 (0-511 decimal), got %d", c.Umask)
+		return fmt.Errorf("umask must be between 0 and 0o777 (0-511 decimal), got %d", c.Umask)
 	}
 
 	return nil

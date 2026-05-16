@@ -2,11 +2,17 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
+	"os"
 	"strings"
+	"time"
+
 	"taskmaster/internal/app"
 	"taskmaster/internal/protocol"
 )
+
+const readRequestDeadline = 5 * time.Second
 
 type ProcessManager interface {
 	GetProcessInfo(name string) (protocol.ProcessInfo, error)
@@ -21,11 +27,18 @@ type ProcessManager interface {
 func HandleConnection(conn net.Conn, mgr ProcessManager) {
 	defer conn.Close()
 
+	if err := conn.SetReadDeadline(time.Now().Add(readRequestDeadline)); err != nil {
+		return
+	}
+
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
 
 	var req protocol.RPCRequest
 	if err := decoder.Decode(&req); err != nil {
+		if isReadTimeout(err) {
+			return
+		}
 		resp := protocol.NewErrorResponse(protocol.ParseError, "parse error", 0)
 		_ = encoder.Encode(resp)
 		return
@@ -35,13 +48,21 @@ func HandleConnection(conn net.Conn, mgr ProcessManager) {
 	_ = encoder.Encode(resp)
 }
 
+func isReadTimeout(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 func RouteRequest(req *protocol.RPCRequest, mgr ProcessManager) *protocol.RPCResponse {
 	if req.Method == "" {
 		return protocol.NewErrorResponse(protocol.InvalidRequest, "method is required", req.ID)
 	}
 
 	parts := strings.Split(req.Method, ".")
-	if len(parts) != 2 || parts[0] != "Taskmaster" {
+	if len(parts) != 2 || parts[0] != protocol.MethodNamespace {
 		return protocol.NewErrorResponse(protocol.InvalidRequest, "invalid method format", req.ID)
 	}
 

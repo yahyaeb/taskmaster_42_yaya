@@ -2,9 +2,10 @@
 // signal name in the file pointed to by SIGNAL_LOG env var.
 //
 // Env vars:
-//   SIGNAL_LOG     path to write "RECEIVED:<signal>\n"
-//   SIGNAL_ACTION  "exit" (default) — exit 0 after logging
-//                  "ignore"         — log and keep running (forces SIGKILL from daemon stoptime)
+//
+//	SIGNAL_LOG     path to write "RECEIVED:<signal>\n"
+//	SIGNAL_ACTION  "exit" (default) — exit 0 after logging
+//	               "ignore"         — log and keep running (forces SIGKILL from daemon stoptime)
 package main
 
 import (

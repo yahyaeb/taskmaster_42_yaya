@@ -3,27 +3,21 @@ package app
 import (
 	"context"
 
-	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
-	"taskmaster/internal/taskmaster"
+	"taskmaster/internal/engine"
 )
 
 func (m *Manager) startWatchdog(spec *config.ConfigSpec) {
 	name := spec.ProcessName
-	proc := m.Process[name]
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.cancelFn = cancel
-	proc.Status = bus.STARTING
+	m.reg.BindWatchdog(name, cancel)
+	pub := m.ch.StatusPublisher()
 	go func() {
-		taskmaster.Run(ctx, *spec, m.executor, m.handler, m.ch.status)
+		defer m.reg.NotifyRunReturned(name)
+		engine.Run(ctx, *spec, m.executor, m.handler, pub)
 	}()
 }
 
 func (m *Manager) stopWatchdog(name string) {
-	proc, ok := m.Process[name]
-	if !ok || proc.cancelFn == nil {
-		return
-	}
-	proc.cancelFn()
-	proc.cancelFn = nil
+	m.reg.ClearWatchdog(name)
 }

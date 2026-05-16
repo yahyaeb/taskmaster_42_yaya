@@ -882,7 +882,6 @@ func Test32_should_restart_supervised_process_when_killed_externally(t *testing.
 	}
 
 	// Wait for the daemon to detect the kill: proc status must leave "running".
-	// Without this, the first poll may return the stale pre-kill "running" status.
 	pollStatusNot(t, "sleeper:00", "running", 3*time.Second)
 
 	// autorestart=unexpected + exitcodes=[0]: killed → non-zero exit → unexpected → restart

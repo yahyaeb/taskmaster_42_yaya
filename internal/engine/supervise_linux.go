@@ -1,4 +1,6 @@
-package taskmaster
+//go:build linux
+
+package engine
 
 import (
 	"context"
@@ -10,7 +12,6 @@ import (
 
 	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
-	"taskmaster/internal/engine"
 )
 
 type outcome int
@@ -21,6 +22,7 @@ const (
 	outcomeFatal
 )
 
+// StopReport summarizes how process supervision ended for one spec.
 type StopReport struct {
 	Name    string
 	Status  bus.Status
@@ -82,11 +84,12 @@ func awaitStarttime(ctx context.Context, pid int, starttime int) bool {
 	}
 }
 
+// Run supervises one process according to spec until stopped, fatal, or retries exhausted.
 func Run(
 	ctx context.Context,
 	spec config.ConfigSpec,
-	executor engine.ProcessExecutor,
-	signals engine.SignalHandler,
+	executor ProcessExecutor,
+	signals SignalHandler,
 	updates chan<- bus.ProcessUpdate,
 ) StopReport {
 	maxRetries := returnMaxRetries(spec)
@@ -120,8 +123,8 @@ func Run(
 func runOnce(
 	ctx context.Context,
 	spec config.ConfigSpec,
-	executor engine.ProcessExecutor,
-	signals engine.SignalHandler,
+	executor ProcessExecutor,
+	signals SignalHandler,
 	updates chan<- bus.ProcessUpdate,
 	attempt int,
 ) outcome {
@@ -141,8 +144,7 @@ func runOnce(
 
 	emit(updates, spec.ProcessName, bus.RUNNING, attempt)
 
-	// Program ruinning wait exit
-	exitCode, err := awaitExit(ctx, spec, proc.PID, signals, executor.Wait)
+	exitCode, err := awaitExit(ctx, proc.PID, executor.Wait)
 	if err != nil {
 		return outcomeStopped
 	}
@@ -163,30 +165,24 @@ func pidUpdate(updates chan<- bus.ProcessUpdate, s string, i int) {
 }
 
 func waitForProcessExit(
-	wait func(context.Context, int) (engine.ExitCode, error),
+	wait func(context.Context, int) (ExitCode, error),
 	pid int,
 	exited chan struct {
-		code engine.ExitCode
+		code ExitCode
 		err  error
 	},
 ) {
 	code, err := wait(context.Background(), pid)
 	exited <- struct {
-		code engine.ExitCode
+		code ExitCode
 		err  error
 	}{code, err}
 }
 
-func awaitExit(
-	ctx context.Context,
-	spec config.ConfigSpec,
-	pid int,
-	signals engine.SignalHandler,
-	wait func(context.Context, int) (engine.ExitCode, error),
-) (engine.ExitCode, error) {
+func awaitExit(ctx context.Context, pid int, wait func(context.Context, int) (ExitCode, error)) (ExitCode, error) {
 
 	exited := make(chan struct {
-		code engine.ExitCode
+		code ExitCode
 		err  error
 	}, 1)
 

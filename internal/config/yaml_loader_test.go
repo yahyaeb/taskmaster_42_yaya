@@ -566,13 +566,13 @@ func TestYAMLLoader_Load_FailsWhenSpecInvalid(t *testing.T) {
 	}
 
 	// Assert: specs are nil or empty
-	if specs != nil && len(specs) > 0 {
+	if len(specs) > 0 {
 		t.Errorf("expected empty specs on validation error, got %d specs", len(specs))
 	}
 
 	// Assert: error mentions validation
 	errStr := err.Error()
-	if !contains(errStr, "Cmd") && !contains(errStr, "validate") {
+	if !contains(errStr, "cmd") && !contains(errStr, "validate") {
 		t.Errorf("expected error to mention Cmd or validation, got: %v", err)
 	}
 }
@@ -637,7 +637,7 @@ func TestYAMLLoader_Load_FailsWhenStopsignalInvalid(t *testing.T) {
 		t.Fatal("expected error for invalid stopsignal, got nil")
 	}
 
-	if !contains(err.Error(), "Stopsignal") {
+	if !contains(err.Error(), "stopsignal") {
 		t.Errorf("expected error mentioning Stopsignal, got: %v", err)
 	}
 
@@ -671,7 +671,7 @@ func TestYAMLLoader_Load_FailsWhenStoptimeNegative(t *testing.T) {
 		t.Fatal("expected error for negative stoptime, got nil")
 	}
 
-	if !contains(err.Error(), "Stoptime") {
+	if !contains(err.Error(), "stoptime") {
 		t.Errorf("expected error mentioning Stoptime, got: %v", err)
 	}
 
@@ -707,7 +707,7 @@ func TestYAMLLoader_Load_FailsWhenUmaskInvalid(t *testing.T) {
 		t.Fatal("expected error for invalid umask, got nil")
 	}
 
-	if !contains(err.Error(), "Umask") {
+	if !contains(err.Error(), "umask") {
 		t.Errorf("expected error mentioning Umask, got: %v", err)
 	}
 
@@ -715,4 +715,3 @@ func TestYAMLLoader_Load_FailsWhenUmaskInvalid(t *testing.T) {
 		t.Errorf("expected empty specs on validation error, got %d", len(specs))
 	}
 }
-

@@ -2,10 +2,11 @@
 // The daemon config redirects stdout to a file so tests can read it.
 //
 // Output lines:
-//   ENV:<key>=<value>      for every env var prefixed with TM_
-//   CWD:<path>             current working directory
-//   UMASK_PERM:<octal>     permissions on a 0666 file created in the workingdir
-//                          (effective perms = 0666 & ~umask, proving umask was applied)
+//
+//	ENV:<key>=<value>      for every env var prefixed with TM_
+//	CWD:<path>             current working directory
+//	UMASK_PERM:<octal>     permissions on a 0666 file created in the workingdir
+//	                       (effective perms = 0666 & ~umask, proving umask was applied)
 package main
 
 import (

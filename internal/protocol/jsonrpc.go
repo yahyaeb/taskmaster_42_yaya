@@ -67,12 +67,15 @@ const (
 	InvalidParams  = -32602 // Invalid method parameters
 	InternalError  = -32603 // Internal JSON-RPC error
 )
+
+// MethodNamespace is the JSON-RPC method prefix (e.g. Taskmaster.Stop).
+const MethodNamespace = "Taskmaster"
+
 // Taskmaster-Specific Error Codes
 const (
-	ProcessNotFound  = -32001 // Process name not found
-	OperationFailed  = -32003 // Manager operation failed
+	ProcessNotFound = -32001 // Process name not found
+	OperationFailed = -32003 // Manager operation failed
 )
-
 
 // RPCRequest represents the standard JSON-RPC 2.0 request envelope
 type RPCRequest struct {

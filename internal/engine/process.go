@@ -24,7 +24,7 @@ type Process struct {
 type ProcessExecutor interface {
 	Start(ctx context.Context, spec config.ConfigSpec) (*Process, error)
 	Wait(ctx context.Context, pid int) (ExitCode, error)
-	Signal(ctx context.Context, pid int, signal interface{}) error
+	Signal(ctx context.Context, pid int, sig os.Signal) error
 }
 
 type OsProcessExecutor struct{}
@@ -101,14 +101,15 @@ func (e *OsProcessExecutor) Wait(ctx context.Context, pid int) (ExitCode, error)
 	}
 }
 
-func (e *OsProcessExecutor) Signal(ctx context.Context, pid int, signal interface{}) error {
+func (e *OsProcessExecutor) Signal(ctx context.Context, pid int, sig os.Signal) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return fmt.Errorf("find process failed: %w", err)
-	}
-	sig, ok := signal.(os.Signal)
-	if !ok {
-		return fmt.Errorf("invalid signal type")
 	}
 	return proc.Signal(sig)
 }

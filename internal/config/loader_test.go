@@ -67,9 +67,9 @@ func TestYAMLConfigLoader_Load(t *testing.T) {
 			},
 		},
 		{
-			name: "empty YAML (zero processes)",
+			name:        "empty YAML (zero processes)",
 			yamlContent: `{}`,
-			wantCount: 0,
+			wantCount:   0,
 		},
 		{
 			name: "negative Numprocs (should default to 1)",
@@ -147,9 +147,9 @@ func TestYAMLConfigLoader_Load_MissingFile(t *testing.T) {
 
 func TestFormatInstanceName(t *testing.T) {
 	tests := []struct {
-		base   string
-		index  int
-		want   string
+		base  string
+		index int
+		want  string
 	}{
 		{"program", 0, "program:00"},
 		{"program", 1, "program:01"},

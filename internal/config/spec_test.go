@@ -37,8 +37,8 @@ func TestConfigSpec_Validate_ProgramEmpty(t *testing.T) {
 		t.Fatal("expected error for empty Program, got nil")
 	}
 
-	if err.Error() != "Program must not be empty" {
-		t.Errorf("expected error 'Program must not be empty', got: %v", err)
+	if err.Error() != "program must not be empty" {
+		t.Errorf("expected error 'program must not be empty', got: %v", err)
 	}
 }
 
@@ -57,8 +57,8 @@ func TestConfigSpec_Validate_CmdEmpty(t *testing.T) {
 		t.Fatal("expected error for empty Cmd, got nil")
 	}
 
-	if err.Error() != "Cmd must not be empty" {
-		t.Errorf("expected error 'Cmd must not be empty', got: %v", err)
+	if err.Error() != "cmd must not be empty" {
+		t.Errorf("expected error 'cmd must not be empty', got: %v", err)
 	}
 }
 
@@ -77,8 +77,8 @@ func TestConfigSpec_Validate_NumprocsZero(t *testing.T) {
 		t.Fatal("expected error for Numprocs=0, got nil")
 	}
 
-	if err.Error() != "Numprocs must be >= 1, got 0" {
-		t.Errorf("expected error 'Numprocs must be >= 1, got 0', got: %v", err)
+	if err.Error() != "numprocs must be >= 1, got 0" {
+		t.Errorf("expected error 'numprocs must be >= 1, got 0', got: %v", err)
 	}
 }
 
@@ -97,8 +97,8 @@ func TestConfigSpec_Validate_NumprocsNegative(t *testing.T) {
 		t.Fatal("expected error for Numprocs=-5, got nil")
 	}
 
-	if err.Error() != "Numprocs must be >= 1, got -5" {
-		t.Errorf("expected error 'Numprocs must be >= 1, got -5', got: %v", err)
+	if err.Error() != "numprocs must be >= 1, got -5" {
+		t.Errorf("expected error 'numprocs must be >= 1, got -5', got: %v", err)
 	}
 }
 
@@ -126,12 +126,12 @@ func TestConfigSpec_Validate_ValidControl(t *testing.T) {
 // should_return_error_when_stopsignal_invalid
 func TestConfigSpec_Validate_InvalidStopsignal(t *testing.T) {
 	spec := ConfigSpec{
-		Program:     "nginx",
-		Cmd:         "nginx",
-		Numprocs:    1,
-		Stopsignal:  "SIGGG",
-		Stoptime:    10,
-		Starttime:   5,
+		Program:    "nginx",
+		Cmd:        "nginx",
+		Numprocs:   1,
+		Stopsignal: "SIGGG",
+		Stoptime:   10,
+		Starttime:  5,
 	}
 
 	err := spec.Validate()
@@ -140,20 +140,20 @@ func TestConfigSpec_Validate_InvalidStopsignal(t *testing.T) {
 	}
 
 	errStr := err.Error()
-	if !contains(errStr, "Stopsignal") {
-		t.Errorf("expected error mentioning Stopsignal, got: %v", err)
+	if !contains(errStr, "stopsignal") {
+		t.Errorf("expected error mentioning stopsignal, got: %v", err)
 	}
 }
 
 // should_return_error_when_stoptime_negative
 func TestConfigSpec_Validate_NegativeStoptime(t *testing.T) {
 	spec := ConfigSpec{
-		Program:     "nginx",
-		Cmd:         "nginx",
-		Numprocs:    1,
-		Stopsignal:  "TERM",
-		Stoptime:    -5,
-		Starttime:   5,
+		Program:    "nginx",
+		Cmd:        "nginx",
+		Numprocs:   1,
+		Stopsignal: "TERM",
+		Stoptime:   -5,
+		Starttime:  5,
 	}
 
 	err := spec.Validate()
@@ -161,20 +161,20 @@ func TestConfigSpec_Validate_NegativeStoptime(t *testing.T) {
 		t.Fatal("expected error for negative stoptime, got nil")
 	}
 
-	if !contains(err.Error(), "Stoptime") {
-		t.Errorf("expected error mentioning Stoptime, got: %v", err)
+	if !contains(err.Error(), "stoptime") {
+		t.Errorf("expected error mentioning stoptime, got: %v", err)
 	}
 }
 
 // should_return_error_when_starttime_negative
 func TestConfigSpec_Validate_NegativeStarttime(t *testing.T) {
 	spec := ConfigSpec{
-		Program:     "nginx",
-		Cmd:         "nginx",
-		Numprocs:    1,
-		Stopsignal:  "TERM",
-		Stoptime:    10,
-		Starttime:   -3,
+		Program:    "nginx",
+		Cmd:        "nginx",
+		Numprocs:   1,
+		Stopsignal: "TERM",
+		Stoptime:   10,
+		Starttime:  -3,
 	}
 
 	err := spec.Validate()
@@ -182,8 +182,8 @@ func TestConfigSpec_Validate_NegativeStarttime(t *testing.T) {
 		t.Fatal("expected error for negative starttime, got nil")
 	}
 
-	if !contains(err.Error(), "Starttime") {
-		t.Errorf("expected error mentioning Starttime, got: %v", err)
+	if !contains(err.Error(), "starttime") {
+		t.Errorf("expected error mentioning starttime, got: %v", err)
 	}
 }
 
@@ -193,12 +193,12 @@ func TestConfigSpec_Validate_AllValidSignals(t *testing.T) {
 
 	for _, sig := range validSignals {
 		spec := ConfigSpec{
-			Program:     "app",
-			Cmd:         "app",
-			Numprocs:    1,
-			Stopsignal:  sig,
-			Stoptime:    10,
-			Starttime:   5,
+			Program:    "app",
+			Cmd:        "app",
+			Numprocs:   1,
+			Stopsignal: sig,
+			Stoptime:   10,
+			Starttime:  5,
 		}
 
 		err := spec.Validate()
@@ -213,16 +213,16 @@ func TestConfigSpec_Validate_AllValidSignals(t *testing.T) {
 // should_return_nil_when_context_slice_valid
 func TestConfigSpec_Validate_ValidContext(t *testing.T) {
 	spec := ConfigSpec{
-		Program:     "app",
-		Cmd:         "app",
-		Numprocs:    1,
-		Stopsignal:  "TERM",
-		Stoptime:    10,
-		Starttime:   5,
-		Workingdir:  "/tmp",
-		Umask:       0o022,
-		Stdout:      "/var/log/app.stdout",
-		Stderr:      "/var/log/app.stderr",
+		Program:    "app",
+		Cmd:        "app",
+		Numprocs:   1,
+		Stopsignal: "TERM",
+		Stoptime:   10,
+		Starttime:  5,
+		Workingdir: "/tmp",
+		Umask:      0o022,
+		Stdout:     "/var/log/app.stdout",
+		Stderr:     "/var/log/app.stderr",
 	}
 
 	err := spec.Validate()
@@ -247,16 +247,16 @@ func TestConfigSpec_Validate_InvalidUmask(t *testing.T) {
 
 	for _, test := range tests {
 		spec := ConfigSpec{
-			Program:     "app",
-			Cmd:         "app",
-			Numprocs:    1,
-			Stopsignal:  "TERM",
-			Stoptime:    10,
-			Starttime:   5,
-			Workingdir:  "/tmp",
-			Umask:       test.umask,
-			Stdout:      "/var/log/app.stdout",
-			Stderr:      "/var/log/app.stderr",
+			Program:    "app",
+			Cmd:        "app",
+			Numprocs:   1,
+			Stopsignal: "TERM",
+			Stoptime:   10,
+			Starttime:  5,
+			Workingdir: "/tmp",
+			Umask:      test.umask,
+			Stdout:     "/var/log/app.stdout",
+			Stderr:     "/var/log/app.stderr",
 		}
 
 		err := spec.Validate()
@@ -269,9 +269,8 @@ func TestConfigSpec_Validate_InvalidUmask(t *testing.T) {
 			t.Errorf("umask %s (%d): expected no error, got: %v", test.name, test.umask, err)
 		}
 
-		if err != nil && !contains(err.Error(), "Umask") {
-			t.Errorf("umask %s: expected error mentioning Umask, got: %v", test.name, err)
+		if err != nil && !contains(err.Error(), "umask") {
+			t.Errorf("umask %s: expected error mentioning umask, got: %v", test.name, err)
 		}
 	}
 }
-
