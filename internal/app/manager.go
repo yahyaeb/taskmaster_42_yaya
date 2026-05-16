@@ -4,9 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"slices"
 	"sync"
+	"syscall"
 	"time"
 
 	"taskmaster/internal/bus"
@@ -15,31 +14,16 @@ import (
 	"taskmaster/internal/protocol"
 )
 
-type stopChan struct {
-	once sync.Once
-	ch   chan struct{}
-}
-
-func (s *stopChan) close() {
-	s.once.Do(func() { close(s.ch) })
-}
-
-func (s *stopChan) C() chan struct{} {
-	return s.ch
-}
-
 // ProcessChannels carries supervisor stop coordination and status broadcasts.
 // All access to the stop map goes through methods guarded by an internal mutex.
 type ProcessChannels struct {
 	mu     sync.Mutex
 	status chan bus.ProcessUpdate
-	stop   map[string]*stopChan
 }
 
 func NewProcessChannels() *ProcessChannels {
 	return &ProcessChannels{
 		status: make(chan bus.ProcessUpdate, 100),
-		stop:   make(map[string]*stopChan),
 	}
 }
 
@@ -58,54 +42,6 @@ func (pc *ProcessChannels) StatusUpdates() <-chan bus.ProcessUpdate {
 	return pc.status
 }
 
-// EnsureSupervisorStop returns the stop channel for name, allocating it if missing.
-func (pc *ProcessChannels) EnsureSupervisorStop(name string) *stopChan {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	sc := pc.stop[name]
-	if sc == nil {
-		sc = &stopChan{ch: make(chan struct{})}
-		pc.stop[name] = sc
-	}
-	return sc
-}
-
-// HasSupervisorStop reports whether a supervision slot exists for name.
-func (pc *ProcessChannels) HasSupervisorStop(name string) bool {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	_, ok := pc.stop[name]
-	return ok
-}
-
-// CloseSupervisorStop closes stop signaling for name and removes it from the map.
-func (pc *ProcessChannels) CloseSupervisorStop(name string) bool {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	sc, ok := pc.stop[name]
-	if !ok {
-		return false
-	}
-	sc.close()
-	delete(pc.stop, name)
-	return true
-}
-
-// CloseAllSupervisorStops closes every supervision slot and clears the map.
-func (pc *ProcessChannels) CloseAllSupervisorStops() []string {
-	pc.mu.Lock()
-	defer pc.mu.Unlock()
-	names := make([]string, 0, len(pc.stop))
-	for name, sc := range pc.stop {
-		if sc != nil {
-			sc.close()
-		}
-		names = append(names, name)
-	}
-	clear(pc.stop)
-	return names
-}
-
 type ReloadResult struct {
 	Added     []string
 	Removed   []string
@@ -122,15 +58,13 @@ type ProcessManager interface {
 	Shutdown() error
 }
 
-var _ ProcessManager = (*Manager)(nil)
-
 type ProcessInstance struct {
 	Pid        int
 	Status     bus.Status
 	RetryCount int
 	LastStart  time.Time
 	Intended   bool
-	Stopped    chan struct{}
+	cancelFn   context.CancelFunc
 }
 
 func newProcessInstance(autostart bool) *ProcessInstance {
@@ -138,29 +72,62 @@ func newProcessInstance(autostart bool) *ProcessInstance {
 		Status:     bus.STOPPED,
 		Intended:   autostart,
 		RetryCount: 0,
-		Stopped:    make(chan struct{}, 1),
 	}
 }
 
 type Manager struct {
 	mu           sync.Mutex
+	ch           *ProcessChannels
 	Config       map[string]*config.ConfigSpec
 	Process      map[string]*ProcessInstance
 	executor     engine.ProcessExecutor
 	handler      engine.SignalHandler
-	ch           *ProcessChannels
 	shutdownFunc func()
 	configPath   string
 	statusCtx    context.Context
 	statusCancel context.CancelFunc
+	rootCtx      context.Context
+	rootCancel   context.CancelFunc
+}
+
+func (m *Manager) runUpdateLoop() {
+	for {
+		select {
+		case update := <-m.ch.status:
+			m.mu.Lock()
+			if proc, ok := m.Process[update.Name]; ok {
+				proc.Status = update.Status
+				if update.Pid > 0 {
+					proc.Pid = update.Pid
+				}
+				if update.HasRetries {
+					proc.RetryCount = update.Retries
+				}
+				if !update.LastStart.IsZero() {
+					proc.LastStart = update.LastStart
+				}
+				if update.Status == bus.STOPPED || update.Status == bus.FATAL {
+					proc.cancelFn = nil
+				}
+			}
+			m.mu.Unlock()
+		case <-m.statusCtx.Done():
+			return
+		}
+	}
 }
 
 func NewManager() *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		Config:   make(map[string]*config.ConfigSpec),
-		Process:  make(map[string]*ProcessInstance),
-		executor: engine.NewOsProcessExecutor(),
-		handler:  &engine.OSSignalHandler{},
+		Config:       make(map[string]*config.ConfigSpec),
+		Process:      make(map[string]*ProcessInstance),
+		executor:     engine.NewOsProcessExecutor(),
+		handler:      &engine.OSSignalHandler{},
+		statusCtx:    context.Background(),
+		rootCtx:      ctx,
+		rootCancel:   cancel,
+		statusCancel: nil,
 	}
 }
 
@@ -172,9 +139,11 @@ func (m *Manager) SetChannels(ch *ProcessChannels) {
 	if m.statusCancel != nil {
 		m.statusCancel()
 	}
+
 	m.ch = ch
-	m.statusCtx, m.statusCancel = context.WithCancel(context.Background())
-	go m.runStatusLoop()
+	m.statusCtx, m.statusCancel = context.WithCancel(m.rootCtx)
+
+	go m.runUpdateLoop()
 }
 
 func (m *Manager) Channels() *ProcessChannels {
@@ -189,7 +158,7 @@ func (m *Manager) Start(name string) error {
 		return fmt.Errorf("process channels not set")
 	}
 
-	configSpec, exists := m.Config[name]
+	spec, exists := m.Config[name]
 	if !exists {
 		return fmt.Errorf("process not found: %s", name)
 	}
@@ -203,7 +172,7 @@ func (m *Manager) Start(name string) error {
 	}
 
 	m.Process[name].Status = bus.STARTING
-	m.startWatchdog(configSpec, m.Process[name])
+	m.startWatchdog(spec)
 
 	slog.Info("Start requested", "name", name)
 	return nil
@@ -211,71 +180,55 @@ func (m *Manager) Start(name string) error {
 
 func (m *Manager) Stop(name string) error {
 	m.mu.Lock()
-
-	if m.ch == nil {
-		m.mu.Unlock()
-		return fmt.Errorf("process channels not set")
-	}
-
-	_, exists := m.Config[name]
-	if !exists {
+	spec, ok := m.Config[name]
+	if !ok {
 		m.mu.Unlock()
 		return fmt.Errorf("process not found: %s", name)
 	}
-
-	if !m.ch.CloseSupervisorStop(name) {
+	proc := m.Process[name]
+	if proc == nil {
 		m.mu.Unlock()
-		return nil
+		return fmt.Errorf("process not found: %s", name)
 	}
-
-	pid := 0
-	if proc, ok := m.Process[name]; ok {
-		pid = proc.Pid
-	}
-
+	pid := proc.Pid
+	deadline := time.Now().Add(time.Duration(spec.Stoptime) * time.Second)
 	m.mu.Unlock()
 
+	sig, err := engine.SignalFromString(spec.Stopsignal)
+	if err != nil || sig == nil {
+		sig, _ = engine.SignalFromString("TERM")
+	}
 	if pid > 0 {
-		sig, _ := engine.SignalFromString(m.Config[name].Stopsignal)
-		if sig == nil {
-			sig, _ = engine.SignalFromString("TERM")
+		_ = m.handler.Send(&engine.Process{PID: pid}, sig)
+	}
+
+	for time.Now().Before(deadline) {
+		m.mu.Lock()
+		proc, ok := m.Process[name]
+		done := ok && (proc.Status == bus.STOPPED || proc.Status == bus.FATAL)
+		m.mu.Unlock()
+		if done {
+			return nil
 		}
-		p := &engine.Process{PID: pid}
-		if err := engine.StopProcess(m.handler, p, sig); err != nil {
-			slog.Error("error stopping program directly", "program", name, "error", err)
+		time.Sleep(50 * time.Millisecond)
+	}
+	if pid > 0 {
+		if err := syscall.Kill(pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+			return fmt.Errorf("failed to kill process %s: %w", name, err)
 		}
 	}
-
-	slog.Info("Stop requested", "name", name)
-
-	stoptime := 10
-	if spec, ok := m.Config[name]; ok {
-		stoptime = spec.Stoptime + 2
+	m.stopWatchdog(name)
+	for i := 0; i < 20; i++ {
+		m.mu.Lock()
+		proc, ok := m.Process[name]
+		done := ok && (proc.Status == bus.STOPPED || proc.Status == bus.FATAL)
+		m.mu.Unlock()
+		if done {
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-
-	proc, ok := m.Process[name]
-	if !ok {
-		return nil
-	}
-
-	// Drain stale notification from previous stop cycle
-	select {
-	case <-proc.Stopped:
-	default:
-	}
-
-	// Check if already stopped
-	if proc.Status == bus.STOPPED || proc.Status == bus.FATAL {
-		return nil
-	}
-
-	// Wait for stop notification with timeout
-	select {
-	case <-proc.Stopped:
-		return nil
-	case <-time.After(time.Duration(stoptime) * time.Second):
-		return fmt.Errorf("timeout waiting for process to stop")
-	}
+	return fmt.Errorf("timeout stopping process: %s", name)
 }
 
 func (m *Manager) Restart(name string) error {
@@ -321,28 +274,13 @@ func (m *Manager) ReloadFromConfig(newConfig map[string]*config.ConfigSpec) (*Re
 
 func (m *Manager) Shutdown() error {
 	m.mu.Lock()
-
-	for name, proc := range m.Process {
-		if m.ch != nil {
-			m.ch.CloseSupervisorStop(name)
-		}
-		if proc.Pid > 0 {
-			sig, _ := engine.SignalFromString("TERM")
-			p := &engine.Process{PID: proc.Pid}
-			if err := engine.StopProcess(m.handler, p, sig); err != nil {
-				slog.Error("error stopping process during shutdown", "process", name, "error", err)
-			}
-		}
-		proc.Status = bus.STOPPED
+	for name := range m.Process {
+		m.stopWatchdog(name)
 	}
-
-	if m.statusCancel != nil {
-		m.statusCancel()
-	}
-
 	shutdownFunc := m.shutdownFunc
 	m.mu.Unlock()
 
+	m.rootCancel()
 	if shutdownFunc != nil {
 		shutdownFunc()
 	}
@@ -386,75 +324,15 @@ func (m *Manager) GetAllProcessInfo() ([]protocol.ProcessInfo, error) {
 	return result, nil
 }
 
-func (m *Manager) StopAll() {
-	m.mu.Lock()
-
-	if m.ch == nil {
-		m.mu.Unlock()
-		return
-	}
-
-	for _, name := range m.ch.CloseAllSupervisorStops() {
-		slog.Info("stopped program", "name", name)
-	}
-	m.mu.Unlock()
-
-	maxStoptime := 10
-	timeout := time.Now().Add(time.Duration(maxStoptime+3) * time.Second)
-	for time.Now().Before(timeout) {
-		infos, _ := m.GetAllProcessInfo()
-		stopped := true
-		for _, info := range infos {
-			if info.Pid > 0 && info.Status == string(bus.RUNNING) {
-				stopped = false
-				break
-			}
-		}
-		if stopped {
-			break
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-
-	infos, _ := m.GetAllProcessInfo()
-	for _, info := range infos {
-		if info.Pid > 0 {
-			p, _ := os.FindProcess(info.Pid)
-			_ = p.Kill()
-		}
+func (m *Manager) StopAll(names []string) {
+	for _, name := range names {
+		m.stopWatchdog(name)
 	}
 }
 
-func (curr *Manager) Spawn(prev *Manager) {
-	curr.mu.Lock()
-	defer curr.mu.Unlock()
-
-	if curr.ch == nil {
-		slog.Error("process channels not set, cannot spawn watchdogs")
-		return
-	}
-
-	prev.mu.Lock()
-	prevKeys := make([]string, 0, len(prev.Config))
-	for name := range prev.Config {
-		prevKeys = append(prevKeys, name)
-	}
-	prev.mu.Unlock()
-
-	for name, setting := range curr.Config {
-		found := slices.Contains(prevKeys, name)
-
-		if !found {
-			curr.startWatchdog(setting, curr.Process[name])
-			slog.Info("started new program", "name", setting.ProcessName)
-		}
-	}
-
-	for _, prevName := range prevKeys {
-		if _, exists := curr.Config[prevName]; !exists {
-			curr.ch.CloseSupervisorStop(prevName)
-			slog.Info("stopped removed program", "name", prevName)
-		}
+func (curr *Manager) Spawn(name string) {
+	if proc, ok := curr.Process[name]; ok && proc.Intended {
+		_ = curr.Start(name)
 	}
 }
 
@@ -522,19 +400,10 @@ func (m *Manager) applyUpdate(update bus.ProcessUpdate) {
 		if !update.LastStart.IsZero() {
 			proc.LastStart = update.LastStart
 		}
-		// Notify waiters when process reaches terminal state
-		if update.Status == bus.STOPPED || update.Status == bus.FATAL {
-			select {
-			case proc.Stopped <- struct{}{}:
-			default:
-			}
-		}
 	}
 }
 
 func (m *Manager) isRunning(name string) bool {
-	if m.ch == nil {
-		return false
-	}
-	return m.ch.HasSupervisorStop(name)
+	proc, ok := m.Process[name]
+	return ok && proc.cancelFn != nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -12,19 +11,6 @@ import (
 	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
 )
-
-func ShouldRestart(autorestart string, exitCode int, exitcodes []int) bool {
-	switch autorestart {
-	case "always":
-		return true
-	case "never":
-		return false
-	case "unexpected":
-		return !slices.Contains(exitcodes, exitCode)
-	default:
-		return false
-	}
-}
 
 type ProcessWatcher struct {
 	Executor ProcessExecutor

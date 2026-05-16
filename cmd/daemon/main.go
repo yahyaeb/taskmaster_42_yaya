@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"taskmaster/internal/app"
+	"taskmaster/internal/server"
 )
 
 func main() {
@@ -22,13 +23,19 @@ func main() {
 
 	manager.SetChannels(ch)
 
-	// Start autostart processes on initial load
-	manager.Spawn(app.NewManager())
+	for name, proc := range manager.Process {
+		if proc != nil && proc.Intended {
+			if err := manager.Start(name); err != nil {
+				fmt.Printf("Error autostarting %s: %v\n", name, err)
+				return
+			}
+		}
+	}
 
 	signal.Notify(sighup, syscall.SIGHUP)
 
 	socketPath := "/tmp/taskmaster.sock"
-	_, err = app.StartSocketListener(socketPath, manager)
+	_, err = server.StartSocketListener(socketPath, manager)
 	if err != nil {
 		fmt.Printf("Error starting socket server: %v\n", err)
 		return

@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	"slices"
+	"reflect"
 
 	"taskmaster/internal/bus"
 	"taskmaster/internal/config"
@@ -36,23 +36,23 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 				m.Process[name] = newProcessInstance(newSpec.Autostart)
 			}
 			if newSpec.Autostart {
-				m.startWatchdog(newSpec, m.Process[name])
+				m.startWatchdog(newSpec)
 			}
 		} else if configChanged(oldSpec, newSpec) {
 			result.Restarted = append(result.Restarted, name)
 			m.Config[name] = newSpec
 			wasRunning := m.isRunning(name)
 			if wasRunning {
-				m.ch.CloseSupervisorStop(name)
+				m.stopWatchdog(name)
 			}
 			if newSpec.Autostart {
-				m.startWatchdog(newSpec, m.Process[name])
+				m.startWatchdog(newSpec)
 			}
 		}
 	}
 
 	for _, name := range result.Removed {
-		m.ch.CloseSupervisorStop(name)
+		m.stopWatchdog(name)
 		delete(m.Config, name)
 		if proc, ok := m.Process[name]; ok {
 			proc.Status = bus.STOPPED
@@ -63,38 +63,5 @@ func (m *Manager) applyConfigDiff(newConfig map[string]*config.ConfigSpec) (*Rel
 }
 
 func configChanged(a, b *config.ConfigSpec) bool {
-	if a.Cmd != b.Cmd ||
-		a.Numprocs != b.Numprocs ||
-		a.NumprocsStart != b.NumprocsStart ||
-		a.Umask != b.Umask ||
-		a.Workingdir != b.Workingdir ||
-		a.Autostart != b.Autostart ||
-		a.Autorestart != b.Autorestart ||
-		a.Startretries != b.Startretries ||
-		a.Starttime != b.Starttime ||
-		a.Stopsignal != b.Stopsignal ||
-		a.Stoptime != b.Stoptime ||
-		a.Stdout != b.Stdout ||
-		a.Stderr != b.Stderr {
-		return true
-	}
-	if !slicesEqual(a.Exitcodes, b.Exitcodes) {
-		return true
-	}
-	if len(a.Env) != len(b.Env) {
-		return true
-	}
-	for k, v := range a.Env {
-		if b.Env[k] != v {
-			return true
-		}
-	}
-	return false
-}
-
-func slicesEqual(a, b []int) bool {
-	if len(a) == 0 && len(b) == 0 {
-		return true
-	}
-	return slices.Equal(a, b)
+	return !reflect.DeepEqual(a, b)
 }
