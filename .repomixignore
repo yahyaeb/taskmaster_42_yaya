@@ -1,4 +1,5 @@
 daemon
+CLAUDE.md
 README.md
 taskmaster.md
 42_project.md
@@ -13,3 +14,5 @@ tmp/taskmaster.sock
 e2e/logs/
 e2e/logs/*
 e2e/programs/
+golang/
+context/
