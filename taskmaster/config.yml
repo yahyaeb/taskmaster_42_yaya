@@ -1,0 +1,41 @@
+# Run: go run .   (cwd can be repo root — main chdirs next to config.yml.)
+# Optional per program: uid, gid (uint32, Linux). Non-zero sets child credentials; 0 = inherit taskmaster.
+programs:
+  dummy-program:
+    cmd: ["echo", "Hello from dummy!"]
+    numprocs: 4
+    autostart: true
+    autorestart: unexpected
+    exitcodes: [0]
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 10
+    stdout: /tmp/dummy.stdout
+    stderr: /tmp/dummy.stderr
+    env: {}
+    workingdir: /tmp
+
+  server:
+    # Small Go helper: finite ticks then exit 0 (good for sequential start+Wait).
+    uid: 0
+    gid: 0
+    cmd: ["go", "run", "./testprograms/ticker/main.go", "4"]
+    numprocs: 1
+    umask: 022
+    workingdir: .
+    autostart: true
+    autorestart: unexpected
+    exitcodes:
+      - 0
+      - 2
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 10
+    stdout: /tmp/nginx.stdout
+    stderr: /tmp/nginx.stderr
+    env:
+      SHOW_NAME: server-demo
+      STARTED_BY: taskmaster
+      ANSWER: "42"
