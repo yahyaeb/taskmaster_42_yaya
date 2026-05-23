@@ -70,3 +70,11 @@ taskmaster42.md
 yel-bouk.md
 golang/
 context/
+taskmaster/EVALUATION_WALKTHROUGH.md
+taskmaster/TEST_PROGRAM_PROMPTS.md
+taskmaster/testprograms/envreporter/envreporter
+taskmaster/testprograms/crasher/crasher
+taskmaster/testprograms/longrunner/longrunner
+taskmaster/testprograms/slowstopper/slowstopper
+taskmaster/taskmasterctl
+taskmaster/taskmasterd

@@ -1,4 +1,4 @@
-package main
+package internal
 
 import (
 	"context"
@@ -88,12 +88,12 @@ func (m *Manager) updateManagerInstances() {
 		}
 		logger := m.logger
 		m.mu.Unlock()
-		
+
 		// Send to logger if configured
 		if logger != nil {
 			logger.Log(update)
 		}
-		
+
 		switch update.Status {
 		case FATAL:
 			fmt.Printf("[ALERT] Process %s hit a FATAL startup failure\n", update.Name)

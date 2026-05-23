@@ -6,17 +6,17 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"taskmaster"
+	"taskmaster/internal"
 )
 
-func printConfig(configMap map[string]*taskmaster.Config) {
+func printConfig(configMap map[string]*internal.Config) {
 	for _, config := range configMap {
 		fmt.Println(config.ProcessName)
 	}
 }
 
-func startLogger() *taskmaster.Logger {
-	logger, err := taskmaster.NewLogger("taskmaster.log")
+func startLogger() *internal.Logger {
+	logger, err := internal.NewLogger("taskmaster.log")
 	if err != nil {
 		fmt.Printf("[ERROR] Failed to create logger: %v\n", err)
 		return nil
@@ -29,7 +29,7 @@ func startLogger() *taskmaster.Logger {
 func main() {
 
 	path := "config.yml"
-	configMap, err := taskmaster.LoadConfig(path)
+	configMap, err := internal.LoadConfig(path)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -44,16 +44,16 @@ func main() {
 
 	ctx, shutdown := context.WithCancel(context.Background())
 
-	taskmaster := taskmaster.CreateManager(ctx)
-	taskmaster.SetLogger(logger)
+	mgr := internal.CreateManager(ctx)
+	mgr.SetLogger(logger)
 
-	if err := taskmaster.Load(configMap); err != nil {
+	if err := mgr.Load(configMap); err != nil {
 		fmt.Printf("[ERROR] manager load failed: %v\n", err)
 		shutdown()
 		return
 	}
 
-	svr, err := taskmaster.NewServer("/tmp/taskmaster.sock", taskmaster, path, shutdown)
+	svr, err := internal.NewServer("/tmp/taskmaster.sock", mgr, path, shutdown)
 	if err != nil {
 		fmt.Printf("[ERROR] Failed to create server: %v\n", err)
 		shutdown()
@@ -79,18 +79,18 @@ func main() {
 		switch sig {
 		case syscall.SIGHUP:
 			fmt.Println("[INFO] Received SIGHUP, reloading configuration...")
-			newConfigMap, err := taskmaster.LoadConfig(path)
+			newConfigMap, err := internal.LoadConfig(path)
 			if err != nil {
 				fmt.Printf("[ERROR] Failed to reload config: %v\n", err)
 				continue
 			}
-			if err := taskmaster.Reload(newConfigMap); err != nil {
+			if err := mgr.Reload(newConfigMap); err != nil {
 				fmt.Printf("[ERROR] Failed to apply new config: %v\n", err)
 			}
 		case syscall.SIGINT, syscall.SIGTERM:
 			fmt.Println("[INFO] Received shutdown signal, exiting...")
 			shutdown()
-			taskmaster.Shutdown()
+			mgr.Shutdown()
 			logger.Close()
 			return
 		}
