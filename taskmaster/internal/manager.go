@@ -196,11 +196,11 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {
 		return true
 	}
 
-	if prevConfig.Uid != newConfig.Uid {
+	if (prevConfig.Uid == nil) != (newConfig.Uid == nil) || (prevConfig.Uid != nil && *prevConfig.Uid != *newConfig.Uid) {
 		return true
 	}
 
-	if prevConfig.Gid != newConfig.Gid {
+	if (prevConfig.Gid == nil) != (newConfig.Gid == nil) || (prevConfig.Gid != nil && *prevConfig.Gid != *newConfig.Gid) {
 		return true
 	}
 
@@ -220,6 +220,40 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {
 		if newConfig.Env[k] != v {
 			return true
 		}
+	}
+
+	if prevConfig.Autorestart != newConfig.Autorestart {
+		return true
+	}
+
+	if len(prevConfig.Exitcodes) != len(newConfig.Exitcodes) {
+		return true
+	}
+
+	for i := range prevConfig.Exitcodes {
+		if prevConfig.Exitcodes[i] != newConfig.Exitcodes[i] {
+			return true
+		}
+	}
+
+	if prevConfig.Startretries != newConfig.Startretries {
+		return true
+	}
+
+	if prevConfig.Starttime != newConfig.Starttime {
+		return true
+	}
+
+	if prevConfig.Stopsignal != newConfig.Stopsignal {
+		return true
+	}
+
+	if prevConfig.Stoptime != newConfig.Stoptime {
+		return true
+	}
+
+	if prevConfig.Autostart != newConfig.Autostart {
+		return true
 	}
 
 	return false

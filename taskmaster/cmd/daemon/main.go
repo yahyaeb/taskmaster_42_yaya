@@ -70,23 +70,13 @@ func main() {
 	defer svr.Stop()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	fmt.Println("---- Taskmaster Monitoring (manager) ----")
 
 	for {
 		sig := <-sigCh
 		switch sig {
-		case syscall.SIGHUP:
-			fmt.Println("[INFO] Received SIGHUP, reloading configuration...")
-			newConfigMap, err := internal.LoadConfig(path)
-			if err != nil {
-				fmt.Printf("[ERROR] Failed to reload config: %v\n", err)
-				continue
-			}
-			if err := mgr.Reload(newConfigMap); err != nil {
-				fmt.Printf("[ERROR] Failed to apply new config: %v\n", err)
-			}
 		case syscall.SIGINT, syscall.SIGTERM:
 			fmt.Println("[INFO] Received shutdown signal, exiting...")
 			shutdown()
