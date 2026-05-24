@@ -9,12 +9,6 @@ import (
 	"taskmaster/internal"
 )
 
-func printConfig(configMap map[string]*internal.Config) {
-	for _, config := range configMap {
-		fmt.Println(config.ProcessName)
-	}
-}
-
 func startLogger() *internal.Logger {
 	logger, err := internal.NewLogger("taskmaster.log")
 	if err != nil {
@@ -35,8 +29,6 @@ func main() {
 		return
 	}
 
-	printConfig(configMap)
-
 	logger := startLogger()
 	if logger == nil {
 		return
@@ -48,21 +40,21 @@ func main() {
 	mgr.SetLogger(logger)
 
 	if err := mgr.Load(configMap); err != nil {
-		fmt.Printf("[ERROR] manager load failed: %v\n", err)
+		logger.LogMessage(internal.LevelError, fmt.Sprintf("manager load failed: %v", err))
 		shutdown()
 		return
 	}
 
 	svr, err := internal.NewServer("/tmp/taskmaster.sock", mgr, path, shutdown)
 	if err != nil {
-		fmt.Printf("[ERROR] Failed to create server: %v\n", err)
+		logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to create server: %v", err))
 		shutdown()
 		return
 	}
 
 	go func() {
 		if err := svr.Serve(); err != nil {
-			fmt.Printf("[ERROR] Server error: %v\n", err)
+			logger.LogMessage(internal.LevelError, fmt.Sprintf("server error: %v", err))
 			shutdown()
 		}
 	}()
@@ -78,7 +70,7 @@ func main() {
 		sig := <-sigCh
 		switch sig {
 		case syscall.SIGINT, syscall.SIGTERM:
-			fmt.Println("[INFO] Received shutdown signal, exiting...")
+			logger.LogMessage(internal.LevelInfo, "received shutdown signal, exiting")
 			shutdown()
 			mgr.Shutdown()
 			logger.Close()
