@@ -21,7 +21,7 @@ func sleeperConf(autostart bool) string {
 	return fmt.Sprintf(`
 programs:
   sleeper:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: %s
     autorestart: unexpected
@@ -175,7 +175,7 @@ func Test12_should_create_N_instances_when_numprocs_is_N(t *testing.T) {
 	cfg := `
 programs:
   worker:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 3
     autostart: false
     autorestart: never
@@ -212,7 +212,7 @@ func Test13_should_restart_when_autorestart_is_always_and_process_exits_cleanly(
 	cfg := fmt.Sprintf(`
 programs:
   exiter:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: always
@@ -246,7 +246,7 @@ func Test14_should_not_restart_when_autorestart_is_never(t *testing.T) {
 	cfg := fmt.Sprintf(`
 programs:
   exiter:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -276,7 +276,7 @@ func Test15_should_restart_when_autorestart_is_unexpected_and_exit_code_not_in_e
 	cfg := fmt.Sprintf(`
 programs:
   exiter:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -307,7 +307,7 @@ func Test16_should_not_restart_when_autorestart_is_unexpected_and_exit_code_in_e
 	cfg := fmt.Sprintf(`
 programs:
   exiter:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -340,7 +340,7 @@ func Test17_should_reach_fatal_when_process_exceeds_startretries(t *testing.T) {
 	cfg := fmt.Sprintf(`
 programs:
   crasher:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -368,7 +368,7 @@ func Test18_should_be_running_after_starttime_elapses_when_process_survives(t *t
 	cfg := `
 programs:
   sleeper:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -407,7 +407,7 @@ func Test19_should_deliver_configured_stopsignal_when_Stop_called(t *testing.T) 
 	cfg := fmt.Sprintf(`
 programs:
   trap:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -441,7 +441,7 @@ func Test20_should_kill_process_after_stoptime_when_process_ignores_stopsignal(t
 	cfg := fmt.Sprintf(`
 programs:
   stubborn:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -487,7 +487,7 @@ func Test21_should_redirect_stdout_to_file_when_stdout_configured(t *testing.T) 
 	cfg := fmt.Sprintf(`
 programs:
   printer:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -520,7 +520,7 @@ func Test22_should_inject_env_variables_into_process_when_env_configured(t *test
 	cfg := fmt.Sprintf(`
 programs:
   printer:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -552,7 +552,7 @@ func Test23_should_set_working_directory_of_process_when_workingdir_configured(t
 	cfg := fmt.Sprintf(`
 programs:
   printer:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -584,7 +584,7 @@ func Test24_should_apply_umask_to_process_file_creation_when_umask_configured(t 
 	cfg := fmt.Sprintf(`
 programs:
   printer:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -639,7 +639,7 @@ func Test27_should_log_when_process_aborts_after_startretries_exhausted(t *testi
 	cfg := fmt.Sprintf(`
 programs:
   crasher:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -667,7 +667,7 @@ func Test28_should_add_new_process_when_Reload_called_after_config_change(t *tes
 	cfgA := `
 programs:
   worker_a:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -679,7 +679,7 @@ programs:
 `
 	cfgB := cfgA + `
   worker_b:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -715,7 +715,7 @@ func Test29_should_remove_process_when_Reload_called_after_config_shrinks(t *tes
 	cfgAB := `
 programs:
   worker_a:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -725,7 +725,7 @@ programs:
     stopsignal: TERM
     stoptime: 1
   worker_b:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -738,7 +738,7 @@ programs:
 	cfgA := `
 programs:
   worker_a:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -775,7 +775,7 @@ func Test30_should_not_restart_unaffected_process_when_Reload_called(t *testing.
 	cfgAB := `
 programs:
   stable:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -785,7 +785,7 @@ programs:
     stopsignal: TERM
     stoptime: 1
   extra:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -798,7 +798,7 @@ programs:
 	cfgA := `
 programs:
   stable:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -830,7 +830,7 @@ func Test31_should_reload_config_when_SIGHUP_received(t *testing.T) {
 	cfgA := `
 programs:
   original:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -842,7 +842,7 @@ programs:
 `
 	cfgB := cfgA + `
   added_by_sighup:
-    cmd: "/bin/sleep 9999"
+    cmd: ["/bin/sleep", "9999"]
     numprocs: 1
     autostart: true
     autorestart: unexpected
@@ -901,7 +901,7 @@ func Test33_should_reach_fatal_when_supervised_process_always_fails(t *testing.T
 	cfg := fmt.Sprintf(`
 programs:
   always_fail:
-    cmd: "%s"
+    cmd: ["%s"]
     numprocs: 1
     autostart: true
     autorestart: unexpected

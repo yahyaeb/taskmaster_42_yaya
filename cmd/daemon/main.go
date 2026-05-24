@@ -1,73 +1,82 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"taskmaster/internal/app"
-	"taskmaster/internal/config"
-	"taskmaster/internal/engine"
-	"taskmaster/internal/server"
-	"taskmaster/internal/state"
+	"taskmaster/internal"
+	"time"
 )
 
+func startLogger() *internal.Logger {
+	logger, err := internal.NewLogger("taskmaster.log")
+	if err != nil {
+		fmt.Printf("[ERROR] Failed to create logger: %v\n", err)
+		return nil
+	}
+	logger.Start()
+
+	return logger
+}
+
 func main() {
-	ch := app.NewProcessChannels()
 
-	sighup := make(chan os.Signal, 1)
-
-	const configPath = "config.yml"
-	loader := &config.YAMLLoader{}
-	specs, err := loader.Load(configPath)
+	path := "config.yml"
+	configMap, err := internal.LoadConfig(path)
 	if err != nil {
-		fmt.Printf("Error loading configuration: %v\n", err)
+		fmt.Println(err)
 		return
 	}
 
-	reg := state.NewRegistry()
-	for i := range specs {
-		spec := &specs[i]
-		reg.Upsert(spec.ProcessName, spec)
-	}
-
-	manager := app.NewManager(
-		reg,
-		engine.NewOsProcessExecutor(),
-		&engine.OSSignalHandler{},
-		loader,
-		slog.Default(),
-	)
-	manager.SetConfigPath(configPath)
-
-	manager.SetChannels(ch)
-
-	if err := manager.StartAutostartProcesses(); err != nil {
-		fmt.Printf("Error autostarting: %v\n", err)
+	logger := startLogger()
+	if logger == nil {
 		return
 	}
 
-	signal.Notify(sighup, syscall.SIGHUP)
+	ctx, shutdown := context.WithCancel(context.Background())
 
-	socketPath := "/tmp/taskmaster.sock"
-	_, err = server.NewSocketListener(socketPath, manager)
+	mgr := internal.CreateManager(ctx)
+	mgr.SetLogger(logger)
+
+	if err := mgr.Load(configMap); err != nil {
+		logger.LogMessage(internal.LevelError, fmt.Sprintf("manager load failed: %v", err))
+		shutdown()
+		return
+	}
+
+	svr, err := internal.NewServer("/tmp/taskmaster.sock", mgr, path, shutdown)
 	if err != nil {
-		fmt.Printf("Error starting socket server: %v\n", err)
+		logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to create server: %v", err))
+		shutdown()
 		return
 	}
 
-	for range sighup {
-		fmt.Println("Hot-reloading configuration...")
-
-		result, err := manager.Reload()
-		if err != nil {
-			fmt.Printf("Error reloading configuration: %v\n", err)
-			continue
+	go func() {
+		if err := svr.Serve(); err != nil {
+			logger.LogMessage(internal.LevelError, fmt.Sprintf("server error: %v", err))
+			shutdown()
 		}
+	}()
 
-		fmt.Printf("Reload complete: added=%v, removed=%v, restarted=%v\n",
-			result.Added, result.Removed, result.Restarted)
+	defer svr.Stop()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	fmt.Println("---- Taskmaster Monitoring (manager) ----")
+
+	for {
+		sig := <-sigCh
+		switch sig {
+		case syscall.SIGINT, syscall.SIGTERM:
+			logger.LogMessage(internal.LevelInfo, "received shutdown signal, exiting")
+			shutdown()
+			mgr.Shutdown()
+			time.Sleep(500 * time.Microsecond)
+			logger.Close()
+			return
+		}
 	}
 }

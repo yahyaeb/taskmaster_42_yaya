@@ -1,80 +1,10 @@
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.so.*
-*.dylib
-
-# Test binary, built with `go test -c`
-*.test
-
-# Output of the go coverage tool
-*.out
-*.cover
-coverage.txt
-coverage.html
-coverage/
-
-# Dependency directories
-vendor/
-
-# Go workspace file
-go.work
-
-# IDE and editor files
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.DS_Store
-*.iml
-
-# Build output
-/bin/
-/dist/
-*.o
-*.a
-
-# Local environment files
-.env
-.env.local
-.env.*.local
-
-# OS-specific
-Thumbs.db
-
-# Temporary files
-tmp/
-temp/
-*.log
-
-# E2E test logs (for debugging)
-e2e/logs/
-
-# Project-specific
-.context/
-
-# Repomix
-repomix-output.xml
-
-# Binary files
-*.bin
-.cursor/
-.claude/
-
-# Developer
-taskmaster_42.md
-taskmaster42.md
-yel-bouk.md
-golang/
-context/
-taskmaster/EVALUATION_WALKTHROUGH.md
-taskmaster/TEST_PROGRAM_PROMPTS.md
-taskmaster/testprograms/envreporter/envreporter
-taskmaster/testprograms/crasher/crasher
-taskmaster/testprograms/longrunner/longrunner
-taskmaster/testprograms/slowstopper/slowstopper
-taskmaster/taskmasterctl
-taskmaster/taskmasterd
+e2e
+plan
+taskmasterd
+taskmasterctl
+taskmaster.log
+e2e/e2e_test.go
+testprograms/crasher/crasher
+testprograms/longrunner/longrunner
+testprograms/envreporter/envreporter
+testprograms/slowstopper/slowstopper
