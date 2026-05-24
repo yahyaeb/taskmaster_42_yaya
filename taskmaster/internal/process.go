@@ -109,8 +109,6 @@ func startProcess(config *Config) (*exec.Cmd, error) {
 		return nil, err
 	}
 
-	fmt.Println("Process started with Name:", config.ProcessName, "and PID:", cmd.Process.Pid)
-
 	closeFiles()
 
 	return cmd, nil

@@ -69,7 +69,7 @@ func restartPolicy(exitCode int, spec *Config) bool {
 	return false
 }
 
-func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTracker) {
+func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTracker, logger *Logger) {
 
 	var cmd *exec.Cmd
 	var err error
@@ -86,9 +86,13 @@ func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTr
 		var waitErr error
 		select {
 		case waitErr = <-waitRunning:
-			fmt.Printf("[STOP] Process %s exited cleanly.\n", name)
+			if logger != nil {
+				logger.LogMessage(LevelInfo, fmt.Sprintf("process '%s' exited cleanly", name))
+			}
 		case <-time.After(stopTimeout):
-			fmt.Printf("[TIMEOUT] %s timed out after %v. Escalating to SIGKILL.\n", name, stopTimeout)
+			if logger != nil {
+				logger.LogMessage(LevelWarn, fmt.Sprintf("process '%s' timed out after %v; escalating to SIGKILL", name, stopTimeout))
+			}
 			_ = cmd.Process.Kill()
 			// Drain channel
 			waitErr = <-waitRunning
@@ -119,16 +123,23 @@ func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTr
 			startupWindow := time.Duration(spec.Starttime) * time.Second
 
 			pid := cmd.Process.Pid
+			if logger != nil {
+				logger.LogMessage(LevelInfo, fmt.Sprintf("spawned: '%s' with pid %d", name, pid))
+			}
 
 			select {
 			case <-ctx.Done():
 				// User requested shutdown at startup window
-				fmt.Printf("[STOPPED] Context cancelled during startup window for %s. Stopping gracefully...\n", name)
+				if logger != nil {
+					logger.LogMessage(LevelInfo, fmt.Sprintf("context canceled during startup window for '%s'", name))
+				}
 				exitCode := terminatePolicy()
 				tracker.Emit(STOPPED, pid, exitCode)
 				return
 			case err = <-waitRunning:
-				fmt.Printf("[RETRY] Process %s crashed during startup window (Attempt %d/%d)\n", name, attempt, spec.Startretries)
+				if logger != nil {
+					logger.LogMessage(LevelWarn, fmt.Sprintf("process '%s' crashed during startup window (attempt %d/%d)", name, attempt, spec.Startretries))
+				}
 				continue
 
 			case <-time.After(startupWindow):
@@ -139,7 +150,9 @@ func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTr
 		}
 
 		if !isRunning {
-			fmt.Printf("[ALERT] Process %s failed to start after %d attempts\n", name, spec.Startretries)
+			if logger != nil {
+				logger.LogMessage(LevelCritical, fmt.Sprintf("process '%s' failed to start after %d attempts", name, spec.Startretries))
+			}
 			tracker.Emit(FATAL, 0, -1)
 			return
 		}
@@ -159,7 +172,9 @@ func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTr
 		exitCode := getExitCode(err)
 
 		if restartPolicy(exitCode, spec) {
-			fmt.Printf("[RESTART] Process %s crashed (ExitCode: %d), restarting...\n", name, exitCode)
+			if logger != nil {
+				logger.LogMessage(LevelWarn, fmt.Sprintf("process '%s' crashed (exit status %d); restarting", name, exitCode))
+			}
 			tracker.Emit(BACKOFF, 0, 0)
 			continue
 		}

@@ -93,15 +93,6 @@ func (m *Manager) updateManagerInstances() {
 		if logger != nil {
 			logger.Log(update)
 		}
-
-		switch update.Status {
-		case FATAL:
-			fmt.Printf("[ALERT] Process %s hit a FATAL startup failure\n", update.Name)
-		case STOPPED:
-			fmt.Printf("[INFO] Process %s has STOPPED (PID: %d, ExitCode: %d)\n", update.Name, update.Pid, update.ExitCode)
-		default:
-			fmt.Printf("[EVENT] Process %s is now %s (PID: %d)\n", update.Name, update.Status, update.Pid)
-		}
 	}
 }
 
@@ -158,7 +149,9 @@ func (m *Manager) Reload(newConfigs map[string]*Config) error {
 
 	for _, s := range startList {
 		if err := m.Start(s.name); err != nil {
-			fmt.Printf("[ERROR] Failed to start process %s during reload: %v\n", s.name, err)
+			if logger := m.logger; logger != nil {
+				logger.LogMessage(LevelError, fmt.Sprintf("failed to start process %s during reload: %v", s.name, err))
+			}
 		}
 	}
 
@@ -276,10 +269,11 @@ func (m *Manager) Start(name string) error {
 	inst.done = make(chan struct{})
 	m.wait.Add(1)
 	tracker := NewUpdateTracker(name, m.updates)
+	logger := m.logger
 	go func() {
 		defer close(inst.done)
 		defer m.wait.Done()
-		supervise(subCtx, name, spec, tracker)
+		supervise(subCtx, name, spec, tracker, logger)
 	}()
 
 	return nil
@@ -356,7 +350,9 @@ func (m *Manager) Load(specs map[string]*Config) error {
 
 	for _, name := range autostart {
 		if err := m.Start(name); err != nil {
-			fmt.Printf("[ERROR] Failed to auto-start process %s: %v\n", name, err)
+			if logger := m.logger; logger != nil {
+				logger.LogMessage(LevelError, fmt.Sprintf("failed to auto-start process %s: %v", name, err))
+			}
 		}
 	}
 
