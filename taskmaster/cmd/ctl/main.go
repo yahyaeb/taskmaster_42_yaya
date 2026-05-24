@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -14,6 +15,49 @@ type rpcResponse struct {
 	ID     int             `json:"id"`
 	Result json.RawMessage `json:"result"`
 	Error  string          `json:"error"`
+}
+
+// normalizeError maps taskmaster internal errors to supervisor-style canonical reasons
+func normalizeError(errText string) string {
+	if errText == "" {
+		return "failed"
+	}
+
+	// no such process
+	if strings.Contains(errText, "not found in manager registry") {
+		return "no such process"
+	}
+
+	// no such file or permission issues
+	if strings.Contains(errText, "open stdout") ||
+		strings.Contains(errText, "open stderr") ||
+		strings.Contains(errText, "no such file or directory") ||
+		strings.Contains(errText, "permission denied") ||
+		strings.Contains(errText, "executable not found in PATH") {
+		return "no such file"
+	}
+
+	// spawn error (process failed to start)
+	if strings.Contains(errText, "cmd.Start()") ||
+		strings.Contains(errText, "failed to start") ||
+		strings.Contains(errText, "failed after") ||
+		regexp.MustCompile(`exit.*status.*unexpected`).MatchString(errText) {
+		return "spawn error"
+	}
+
+	// not running (context canceled or process not active)
+	if strings.Contains(errText, "context canceled") ||
+		strings.Contains(errText, "not running") {
+		return "not running"
+	}
+
+	// abnormal termination (with exit code)
+	if regexp.MustCompile(`exit.*status.*[0-9]+`).MatchString(errText) {
+		return "abnormal termination"
+	}
+
+	// default fallback
+	return "failed"
 }
 
 type statusReport struct {
@@ -72,18 +116,15 @@ func main() {
 		conn.Close()
 
 		if resp.Error != "" {
-			errText := resp.Error
-			if strings.Contains(errText, "not found in manager registry") {
-				errText = "no such process"
-			}
+			reason := normalizeError(resp.Error)
 			if method == "start" || method == "stop" || method == "restart" {
 				if len(parts) > 1 {
-					fmt.Printf("%s: ERROR (%s)\n", parts[1], errText)
+					fmt.Printf("%s: ERROR (%s)\n", parts[1], reason)
 				} else {
-					fmt.Printf("ERROR (%s)\n", errText)
+					fmt.Printf("ERROR (%s)\n", reason)
 				}
 			} else {
-				fmt.Printf("ERROR (%s)\n", errText)
+				fmt.Printf("error: %s\n", reason)
 			}
 			continue
 		}
