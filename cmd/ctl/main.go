@@ -1,73 +1,193 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
+	"regexp"
+	"sort"
+	"strings"
 )
 
-// CLI tool for communicating with the taskmaster daemon.
-// Developer B will implement this with socket communication
-// to interact with the Manager API from daemon.
-
-func main() {
-	if len(os.Args) < 2 {
-		printUsage()
-		return
-	}
-
-	command := os.Args[1]
-
-	// TODO: Implement socket communication to daemon
-	// For now, print placeholder messages
-
-	switch command {
-	case "status":
-		fmt.Println("Getting process status from daemon...")
-		// TODO: Connect to daemon socket and request status
-	case "start":
-		if len(os.Args) < 3 {
-			fmt.Println("Usage: ctl start <process_name>")
-			return
-		}
-		procName := os.Args[2]
-		fmt.Printf("Starting process: %s\n", procName)
-		// TODO: Connect to daemon and request start
-	case "stop":
-		if len(os.Args) < 3 {
-			fmt.Println("Usage: ctl stop <process_name>")
-			return
-		}
-		procName := os.Args[2]
-		fmt.Printf("Stopping process: %s\n", procName)
-		// TODO: Connect to daemon and request stop
-	case "restart":
-		if len(os.Args) < 3 {
-			fmt.Println("Usage: ctl restart <process_name>")
-			return
-		}
-		procName := os.Args[2]
-		fmt.Printf("Restarting process: %s\n", procName)
-		// TODO: Connect to daemon and request restart
-	case "reload":
-		fmt.Println("Reloading configuration...")
-		// TODO: Connect to daemon and request reload
-	default:
-		fmt.Printf("Unknown command: %s\n", command)
-		printUsage()
-	}
+type rpcResponse struct {
+	ID     int             `json:"id"`
+	Result json.RawMessage `json:"result"`
+	Error  string          `json:"error"`
 }
 
-func printUsage() {
-	fmt.Print(`
-Usage: ctl [command] [args]
+// normalizeError maps taskmaster internal errors to supervisor-style canonical reasons
+func normalizeError(errText string) string {
+	if errText == "" {
+		return "failed"
+	}
 
-Commands:
-  status              Show status of all processes
-  start <name>        Start a process
-  stop <name>         Stop a process
-  restart <name>      Restart a process
-  reload              Reload configuration from file
+	// no such process
+	if strings.Contains(errText, "not found in manager registry") {
+		return "no such process"
+	}
 
-This tool communicates with the taskmaster daemon via socket.
-`)
+	// no such file or permission issues
+	if strings.Contains(errText, "open stdout") ||
+		strings.Contains(errText, "open stderr") ||
+		strings.Contains(errText, "no such file or directory") ||
+		strings.Contains(errText, "permission denied") ||
+		strings.Contains(errText, "executable not found in PATH") {
+		return "no such file"
+	}
+
+	// spawn error (process failed to start)
+	if strings.Contains(errText, "cmd.Start()") ||
+		strings.Contains(errText, "failed to start") ||
+		strings.Contains(errText, "failed after") ||
+		regexp.MustCompile(`exit.*status.*unexpected`).MatchString(errText) {
+		return "spawn error"
+	}
+
+	// not running (context canceled or process not active)
+	if strings.Contains(errText, "context canceled") ||
+		strings.Contains(errText, "not running") {
+		return "not running"
+	}
+
+	// abnormal termination (with exit code)
+	if regexp.MustCompile(`exit.*status.*[0-9]+`).MatchString(errText) {
+		return "abnormal termination"
+	}
+
+	// default fallback
+	return "failed"
+}
+
+type statusReport struct {
+	Name     string `json:"Name"`
+	Status   string `json:"Status"`
+	Pid      int    `json:"Pid"`
+	ExitCode int    `json:"ExitCode"`
+	Uptime   string `json:"Uptime"`
+}
+
+func main() {
+	socket := "/tmp/taskmaster.sock"
+	reader := bufio.NewReader(os.Stdin)
+	id := 0
+
+	for {
+		fmt.Print("taskmaster> ")
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if line == "exit" || line == "quit" {
+			return
+		}
+
+		parts := strings.Fields(line)
+		method := parts[0]
+		var params any
+		if len(parts) > 1 {
+			params = map[string]string{"name": parts[1]}
+		}
+
+		id++
+		req := map[string]any{"id": id, "method": method}
+		if params != nil {
+			req["params"] = params
+		}
+
+		conn, err := net.Dial("unix", socket)
+		if err != nil {
+			fmt.Println("dial:", err)
+			continue
+		}
+
+		json.NewEncoder(conn).Encode(req)
+		var resp rpcResponse
+		if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+			conn.Close()
+			fmt.Println("error:", err)
+			continue
+		}
+		conn.Close()
+
+		if resp.Error != "" {
+			reason := normalizeError(resp.Error)
+			if method == "start" || method == "stop" || method == "restart" {
+				if len(parts) > 1 {
+					fmt.Printf("%s: ERROR (%s)\n", parts[1], reason)
+				} else {
+					fmt.Printf("ERROR (%s)\n", reason)
+				}
+			} else {
+				fmt.Printf("error: %s\n", reason)
+			}
+			continue
+		}
+
+		switch method {
+		case "status":
+			var reports []statusReport
+			if err := json.Unmarshal(resp.Result, &reports); err != nil {
+				fmt.Println("error:", err)
+				continue
+			}
+			sort.Slice(reports, func(i, j int) bool {
+				return reports[i].Name < reports[j].Name
+			})
+			maxLen := 0
+			for _, report := range reports {
+				if len(report.Name) > maxLen {
+					maxLen = len(report.Name)
+				}
+			}
+			nameFormat := fmt.Sprintf("%%-%ds", maxLen+3)
+			for _, report := range reports {
+				state := strings.ToUpper(report.Status)
+				desc := ""
+				switch report.Status {
+				case "running":
+					if report.Pid > 0 {
+						desc = fmt.Sprintf("pid %d, uptime %s", report.Pid, report.Uptime)
+					} else {
+						desc = fmt.Sprintf("uptime %s", report.Uptime)
+					}
+				case "stopped":
+					if report.ExitCode != 0 {
+						desc = fmt.Sprintf("exited (status %d)", report.ExitCode)
+					} else {
+						desc = "stopped"
+					}
+				case "starting":
+					desc = "starting"
+				case "backoff":
+					desc = "backoff"
+				case "fatal":
+					desc = "fatal"
+				}
+				line := fmt.Sprintf(nameFormat+"%-10s%s", report.Name, state, desc)
+				fmt.Println(line)
+			}
+		case "start":
+			if len(parts) > 1 {
+				fmt.Printf("%s: started\n", parts[1])
+			}
+		case "stop":
+			if len(parts) > 1 {
+				fmt.Printf("%s: stopped\n", parts[1])
+			}
+		case "restart":
+			if len(parts) > 1 {
+				fmt.Printf("%s: restarted\n", parts[1])
+			}
+		case "reload", "shutdown":
+			fmt.Println("ok")
+		default:
+			fmt.Println("ok")
+		}
+	}
 }

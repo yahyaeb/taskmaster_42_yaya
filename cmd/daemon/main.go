@@ -1,51 +1,82 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-
-	"taskmaster/internal/app"
+	"taskmaster/internal"
+	"time"
 )
 
+func startLogger() *internal.Logger {
+	logger, err := internal.NewLogger("taskmaster.log")
+	if err != nil {
+		fmt.Printf("[ERROR] Failed to create logger: %v\n", err)
+		return nil
+	}
+	logger.Start()
+
+	return logger
+}
+
 func main() {
-	ch := app.NewProcessChannels()
 
-	sighup := make(chan os.Signal, 1)
-
-	manager, err := app.NewManagerFromConfig("config.yml")
+	path := "config.yml"
+	configMap, err := internal.LoadConfig(path)
 	if err != nil {
-		fmt.Printf("Error loading configuration: %v\n", err)
+		fmt.Println(err)
 		return
 	}
 
-	manager.SetChannels(ch)
-
-	// Start autostart processes on initial load
-	manager.Spawn(app.NewManager())
-
-	signal.Notify(sighup, syscall.SIGHUP)
-
-	socketPath := "/tmp/taskmaster.sock"
-	_, err = app.StartSocketListener(socketPath, manager)
-	if err != nil {
-		fmt.Printf("Error starting socket server: %v\n", err)
+	logger := startLogger()
+	if logger == nil {
 		return
 	}
 
-	for range sighup {
-		fmt.Println("Hot-reloading configuration...")
+	ctx, shutdown := context.WithCancel(context.Background())
 
-		// Just reload config in existing manager
-		// This avoids channel competition from manager swap
-		result, err := manager.Reload()
-		if err != nil {
-			fmt.Printf("Error reloading configuration: %v\n", err)
-			continue
+	mgr := internal.CreateManager(ctx)
+	mgr.SetLogger(logger)
+
+	if err := mgr.Load(configMap); err != nil {
+		logger.LogMessage(internal.LevelError, fmt.Sprintf("manager load failed: %v", err))
+		shutdown()
+		return
+	}
+
+	svr, err := internal.NewServer("/tmp/taskmaster.sock", mgr, path, shutdown)
+	if err != nil {
+		logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to create server: %v", err))
+		shutdown()
+		return
+	}
+
+	go func() {
+		if err := svr.Serve(); err != nil {
+			logger.LogMessage(internal.LevelError, fmt.Sprintf("server error: %v", err))
+			shutdown()
 		}
+	}()
 
-		fmt.Printf("Reload complete: added=%v, removed=%v, restarted=%v\n",
-			result.Added, result.Removed, result.Restarted)
+	defer svr.Stop()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	fmt.Println("---- Taskmaster Monitoring (manager) ----")
+
+	for {
+		sig := <-sigCh
+		switch sig {
+		case syscall.SIGINT, syscall.SIGTERM:
+			logger.LogMessage(internal.LevelInfo, "received shutdown signal, exiting")
+			shutdown()
+			mgr.Shutdown()
+			time.Sleep(500 * time.Microsecond)
+			logger.Close()
+			return
+		}
 	}
 }
