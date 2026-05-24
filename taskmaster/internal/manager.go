@@ -163,14 +163,7 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {
 		return true
 	}
 
-	if prevConfig.Cmd == nil && newConfig.Cmd != nil {
-		return true
-	}
-
-	if prevConfig.Cmd != nil && newConfig.Cmd == nil {
-		return true
-	}
-
+	// Only check fields that require process restart
 	if len(prevConfig.Cmd) != len(newConfig.Cmd) {
 		return true
 	}
@@ -197,14 +190,6 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {
 		return true
 	}
 
-	if prevConfig.Stdout != newConfig.Stdout {
-		return true
-	}
-
-	if prevConfig.Stderr != newConfig.Stderr {
-		return true
-	}
-
 	if len(prevConfig.Env) != len(newConfig.Env) {
 		return true
 	}
@@ -213,40 +198,6 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {
 		if newConfig.Env[k] != v {
 			return true
 		}
-	}
-
-	if prevConfig.Autorestart != newConfig.Autorestart {
-		return true
-	}
-
-	if len(prevConfig.Exitcodes) != len(newConfig.Exitcodes) {
-		return true
-	}
-
-	for i := range prevConfig.Exitcodes {
-		if prevConfig.Exitcodes[i] != newConfig.Exitcodes[i] {
-			return true
-		}
-	}
-
-	if prevConfig.Startretries != newConfig.Startretries {
-		return true
-	}
-
-	if prevConfig.Starttime != newConfig.Starttime {
-		return true
-	}
-
-	if prevConfig.Stopsignal != newConfig.Stopsignal {
-		return true
-	}
-
-	if prevConfig.Stoptime != newConfig.Stoptime {
-		return true
-	}
-
-	if prevConfig.Autostart != newConfig.Autostart {
-		return true
 	}
 
 	return false
