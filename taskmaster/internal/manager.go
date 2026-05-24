@@ -312,6 +312,7 @@ func (m *Manager) Load(specs map[string]*Config) error {
 
 func (m *Manager) Shutdown() {
 	m.wait.Wait()
+	close(m.updates)
 }
 
 func formatUptime(startTime time.Time) string {

@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 	"taskmaster/internal"
+	"time"
 )
 
 func startLogger() *internal.Logger {
@@ -73,6 +74,7 @@ func main() {
 			logger.LogMessage(internal.LevelInfo, "received shutdown signal, exiting")
 			shutdown()
 			mgr.Shutdown()
+			time.Sleep(500 * time.Microsecond)
 			logger.Close()
 			return
 		}
