@@ -157,7 +157,8 @@ func (m *Manager) Reload(newConfigs map[string]*Config) error {
 	return nil
 }
 
-func isConfigChanged(prevConfig, newConfig *Config) bool {	if prevConfig == nil || newConfig == nil {
+func isConfigChanged(prevConfig, newConfig *Config) bool {
+	if prevConfig == nil || newConfig == nil {
 		return true
 	}
 
@@ -214,7 +215,7 @@ func (m *Manager) Start(name string) error {
 	spec := inst.spec
 
 	m.wait.Add(1)
-	tracker := NewUpdateTracker(name, m.updates)
+	tracker := &UpdateTracker{name: name, updates: m.updates}
 	logger := m.logger
 	go func() {
 		supervise(runtime.ctx, name, spec, tracker, logger)

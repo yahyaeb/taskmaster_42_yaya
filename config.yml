@@ -91,11 +91,11 @@ programs:
     cmd: ["./testprograms/longrunner/longrunner"]
     numprocs: 1
     autostart: true
-    autorestart: always
+    autorestart: never
     exitcodes: [0]
     startretries: 3
     starttime: 1
-    stopsignal: TERM
+    stopsignal: USR1
     stoptime: 5
     stdout: /tmp/longrunner.stdout
     stderr: /tmp/longrunner.stderr

@@ -41,10 +41,6 @@ type processInfo struct {
 	stopTimeout time.Duration
 }
 
-func NewUpdateTracker(name string, ch chan<- ProcessUpdate) *UpdateTracker {
-	return &UpdateTracker{name: name, updates: ch}
-}
-
 func (t *UpdateTracker) Emit(status Status, pid int, exitCode int) {
 	t.updates <- ProcessUpdate{
 		Name:      t.name,
@@ -66,15 +62,17 @@ func getExitCode(err error) int {
 	return 0
 }
 
-func stopProcess(cmd *exec.Cmd, stopSignal os.Signal, stopTimeout time.Duration, exitCh <-chan error) {
+func stopProcess(cmd *exec.Cmd, stopSignal os.Signal, stopTimeout time.Duration, exitCh <-chan error) int {
 	_ = cmd.Process.Signal(stopSignal)
 
+	var err error
 	select {
-	case <-exitCh:
+	case err = <-exitCh:
 	case <-time.After(stopTimeout):
 		_ = cmd.Process.Kill()
-		<-exitCh
+		err = <-exitCh
 	}
+	return getExitCode(err)
 }
 
 func restartPolicy(exitCode int, spec *Config) bool {
@@ -182,8 +180,8 @@ func monitorRuntime(processInfo *processInfo, cmd *exec.Cmd, exitCh chan error, 
 	select {
 	case <-processInfo.ctx.Done():
 		// Context cancelled during runtime
-		stopProcess(cmd, processInfo.stopSignal, processInfo.stopTimeout, exitCh)
-		processInfo.tracker.Emit(STOPPED, pid, 0)
+		exitCode := stopProcess(cmd, processInfo.stopSignal, processInfo.stopTimeout, exitCh)
+		processInfo.tracker.Emit(STOPPED, pid, exitCode)
 		return false
 
 	case err := <-exitCh:
