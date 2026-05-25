@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"time"
@@ -32,6 +33,14 @@ type UpdateTracker struct {
 	updates chan<- ProcessUpdate
 }
 
+type processInfo struct {
+	ctx         context.Context
+	spec        *Config
+	tracker     *UpdateTracker
+	stopSignal  os.Signal
+	stopTimeout time.Duration
+}
+
 func NewUpdateTracker(name string, ch chan<- ProcessUpdate) *UpdateTracker {
 	return &UpdateTracker{name: name, updates: ch}
 }
@@ -57,6 +66,17 @@ func getExitCode(err error) int {
 	return 0
 }
 
+func stopProcess(cmd *exec.Cmd, stopSignal os.Signal, stopTimeout time.Duration, exitCh <-chan error) {
+	_ = cmd.Process.Signal(stopSignal)
+
+	select {
+	case <-exitCh:
+	case <-time.After(stopTimeout):
+		_ = cmd.Process.Kill()
+		<-exitCh
+	}
+}
+
 func restartPolicy(exitCode int, spec *Config) bool {
 	switch spec.Autorestart {
 	case "always":
@@ -69,122 +89,135 @@ func restartPolicy(exitCode int, spec *Config) bool {
 	return false
 }
 
-func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTracker, logger *Logger) {
+func launchProcess(spec *Config, tracker *UpdateTracker) (*exec.Cmd, chan error, error) {
+	cmd, err := startProcess(spec)
+	if err != nil {
+		// Process start retry failed
+		tracker.Emit(FATAL, 0, -1)
+		return nil, nil, err
+	}
 
+	exitCh := make(chan error, 1)
+
+	go func(c *exec.Cmd) {
+		exitCh <- c.Wait()
+	}(cmd)
+
+	return cmd, exitCh, nil
+}
+
+func waitForStartup(processInfo *processInfo, name string, logger *Logger) (*exec.Cmd, chan error, int, bool) {
 	var cmd *exec.Cmd
 	var err error
 	var exitCh chan error
 	var pid int
+	started := false
 
-	stopSignal := getStopSignal(spec.Stopsignal)
-	stopTimeout := time.Duration(spec.Stoptime) * time.Second
+	for attempt := 0; attempt <= processInfo.spec.Startretries; attempt++ {
+		// Emit starting status
+		processInfo.tracker.Emit(STARTING, 0, 0)
 
-	for {
-		// Startup phase: try to spawn and validate process
-		started := false
-
-		for attempt := 0; attempt <= spec.Startretries; attempt++ {
-			// Emit starting status
-			tracker.Emit(STARTING, 0, 0)
-
-			// Attempt process start
-			cmd, err = startProcess(spec)
-			if err != nil {
-				// Process start retry failed
-				tracker.Emit(FATAL, 0, -1)
-				continue
-			}
-
-			exitCh = make(chan error, 1)
-			command := cmd
-			go func(c *exec.Cmd) {
-				exitCh <- c.Wait()
-			}(command)
-
-			pid = cmd.Process.Pid
-			if logger != nil {
-				logger.LogMessage(LevelInfo, fmt.Sprintf("spawned: '%s' with pid %d", name, pid))
-			}
-
-			// Validate process startup within window
-			startupWindow := time.Duration(spec.Starttime) * time.Second
-			// Enforce minimum 1 second startup validation window
-			if startupWindow < time.Second {
-				startupWindow = time.Second
-			}
-			timer := time.NewTimer(startupWindow)
-
-			select {
-			case <-ctx.Done():
-				// Context cancelled during startup validation
-				_ = cmd.Process.Signal(stopSignal)
-
-				select {
-				case <-exitCh:
-				case <-time.After(stopTimeout):
-					_ = cmd.Process.Kill()
-					<-exitCh
-				}
-
-				tracker.Emit(STOPPED, pid, 0)
-				return
-
-			case err = <-exitCh:
-				// Process exited during startup validation
-				exitCode := getExitCode(err)
-				tracker.Emit(FATAL, pid, exitCode)
-				if restartPolicy(exitCode, spec) {
-					tracker.Emit(BACKOFF, pid, exitCode)
-					time.Sleep(time.Duration(1) * time.Second)
-					continue
-				}
-				return
-
-			case <-timer.C:
-				// Startup validation passed
-				tracker.Emit(RUNNING, pid, 0)
-				started = true
-			}
-
-			if started {
-				break
-			}
+		// Attempt process start
+		cmd, exitCh, err = launchProcess(processInfo.spec, processInfo.tracker)
+		if err != nil {
+			continue
 		}
 
-		if !started {
-			// All startup retries exhausted
-			if logger != nil {
-				logger.LogMessage(LevelCritical, fmt.Sprintf("process '%s' failed to start after %d attempts", name, spec.Startretries))
-			}
-			return
+		pid = cmd.Process.Pid
+		if logger != nil {
+			logger.LogMessage(LevelInfo, fmt.Sprintf("spawned: '%s' with pid %d", name, pid))
 		}
 
-		// Runtime monitoring phase
+		// Validate process startup within window
+		startupWindow := time.Duration(processInfo.spec.Starttime) * time.Second
+		// Enforce minimum 1 second startup validation window
+		if startupWindow < time.Second {
+			startupWindow = time.Second
+		}
+		timer := time.NewTimer(startupWindow)
+
 		select {
-		case <-ctx.Done():
-			// Context cancelled during runtime
-			_ = cmd.Process.Signal(stopSignal)
-
-			select {
-			case <-exitCh:
-			case <-time.After(stopTimeout):
-				_ = cmd.Process.Kill()
-				<-exitCh
-			}
-
-			tracker.Emit(STOPPED, pid, 0)
-			return
+		case <-processInfo.ctx.Done():
+			// Context cancelled during startup validation
+			stopProcess(cmd, processInfo.stopSignal, processInfo.stopTimeout, exitCh)
+			timer.Stop()
+			return nil, nil, 0, false
 
 		case err = <-exitCh:
-			// Process exited during runtime
+			// Process exited during startup validation
+			timer.Stop()
 			exitCode := getExitCode(err)
-			tracker.Emit(STOPPED, pid, exitCode)
-			if restartPolicy(exitCode, spec) {
-				tracker.Emit(BACKOFF, pid, exitCode)
-				time.Sleep(time.Duration(1) * time.Second)
+			processInfo.tracker.Emit(FATAL, pid, exitCode)
+			if restartPolicy(exitCode, processInfo.spec) {
+				processInfo.tracker.Emit(BACKOFF, pid, exitCode)
+				time.Sleep(time.Second)
 				continue
 			}
+			return nil, nil, 0, false
+
+		case <-timer.C:
+			// Startup validation passed
+			timer.Stop()
+			processInfo.tracker.Emit(RUNNING, pid, 0)
+			started = true
+		}
+
+		if started {
+			break
+		}
+	}
+
+	if !started {
+		// All startup retries exhausted
+		if logger != nil {
+			logger.LogMessage(LevelCritical, fmt.Sprintf("process '%s' failed to start after %d attempts", name, processInfo.spec.Startretries))
+		}
+		return nil, nil, 0, false
+	}
+
+	return cmd, exitCh, pid, true
+}
+
+func monitorRuntime(processInfo *processInfo, cmd *exec.Cmd, exitCh chan error, pid int) bool {
+	select {
+	case <-processInfo.ctx.Done():
+		// Context cancelled during runtime
+		stopProcess(cmd, processInfo.stopSignal, processInfo.stopTimeout, exitCh)
+		processInfo.tracker.Emit(STOPPED, pid, 0)
+		return false
+
+	case err := <-exitCh:
+		// Process exited during runtime
+		exitCode := getExitCode(err)
+		processInfo.tracker.Emit(STOPPED, pid, exitCode)
+		if restartPolicy(exitCode, processInfo.spec) {
+			processInfo.tracker.Emit(BACKOFF, pid, exitCode)
+			return true
+		}
+		return false
+	}
+}
+
+func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTracker, logger *Logger) {
+
+	processInfo := &processInfo{
+		ctx:         ctx,
+		spec:        spec,
+		tracker:     tracker,
+		stopSignal:  getStopSignal(spec.Stopsignal),
+		stopTimeout: time.Duration(spec.Stoptime) * time.Second,
+	}
+
+	for {
+		cmd, exitCh, pid, ok := waitForStartup(processInfo, name, logger)
+		if !ok {
 			return
 		}
+
+		shouldRestart := monitorRuntime(processInfo, cmd, exitCh, pid)
+		if !shouldRestart {
+			return
+		}
+		time.Sleep(time.Second)
 	}
 }
