@@ -115,8 +115,7 @@ func (m *Manager) Reload(newConfigs map[string]*Config) error {
 			continue
 		}
 
-		if isConfigChanged(inst.spec, newConfig, inst.status) {
-			shutdownList = append(shutdownList, inst.cancel)
+		if isConfigChanged(inst.spec, newConfig) {			shutdownList = append(shutdownList, inst.cancel)
 			delete(m.instances, name)
 			startList = append(startList, start{name: name, config: newConfig})
 			continue
@@ -158,8 +157,7 @@ func (m *Manager) Reload(newConfigs map[string]*Config) error {
 	return nil
 }
 
-func isConfigChanged(prevConfig, newConfig *Config, currentStatus Status) bool {
-	if prevConfig == nil || newConfig == nil {
+func isConfigChanged(prevConfig, newConfig *Config) bool {	if prevConfig == nil || newConfig == nil {
 		return true
 	}
 
@@ -198,11 +196,6 @@ func isConfigChanged(prevConfig, newConfig *Config, currentStatus Status) bool {
 		if newConfig.Env[k] != v {
 			return true
 		}
-	}
-
-	// If autostart changed from false → true and process is stopped, trigger start
-	if !prevConfig.Autostart && newConfig.Autostart && currentStatus == STOPPED {
-		return true
 	}
 
 	return false
