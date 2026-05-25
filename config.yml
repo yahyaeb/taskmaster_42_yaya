@@ -44,7 +44,7 @@ programs:
   crasher:
     cmd: ["./testprograms/crasher/crasher", "1"]
     numprocs: 1
-    autostart: false
+    autostart: true
     autorestart: always
     exitcodes: [0]
     startretries: 3
@@ -121,17 +121,17 @@ programs:
       SHOW_NAME: server-demo
       STARTED_BY: taskmaster
       ANSWER: "42"
-  # hello:
-  #   cmd: ["./testprograms/hello/hello.sh"]
-  #   numprocs: 1
-  #   autostart: true
-  #   autorestart: never
-  #   exitcodes: [0]
-  #   startretries: 0
-  #   starttime: 0
-  #   stopsignal: TERM
-  #   stoptime: 2
-  #   stdout: /tmp/hello.stdout
-  #   stderr: /tmp/hello.stderr
-  #   env: {}
-  #   workingdir: /tmp
+  hello:
+    cmd: ["./testprograms/hello/hello.sh"]
+    numprocs: 1
+    autostart: true
+    autorestart: always
+    exitcodes: [0]
+    startretries: 0
+    starttime: 0
+    stopsignal: TERM
+    stoptime: 2
+    stdout: /tmp/hello.stdout
+    stderr: /tmp/hello.stderr
+    env: {}
+    workingdir: /tmp

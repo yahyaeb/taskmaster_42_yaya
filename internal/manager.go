@@ -35,8 +35,7 @@ type Instance struct {
 	status    Status
 	pid       int
 	exitCode  int
-	cancel    context.CancelFunc
-	done      chan struct{}
+	runtime   *Runtime
 	lastStart time.Time
 }
 
@@ -104,18 +103,19 @@ func (m *Manager) Reload(newConfigs map[string]*Config) error {
 	}
 	var startList []start
 
-	var shutdownList []context.CancelFunc
+	var shutdownList []*Runtime
 
 	m.mu.Lock()
 	for name, inst := range m.instances {
 		newConfig, exists := newConfigs[name]
 		if !exists {
-			shutdownList = append(shutdownList, inst.cancel)
+			shutdownList = append(shutdownList, inst.runtime)
 			delete(m.instances, name)
 			continue
 		}
 
-		if isConfigChanged(inst.spec, newConfig) {			shutdownList = append(shutdownList, inst.cancel)
+		if isConfigChanged(inst.spec, newConfig) {
+			shutdownList = append(shutdownList, inst.runtime)
 			delete(m.instances, name)
 			startList = append(startList, start{name: name, config: newConfig})
 			continue
@@ -142,7 +142,7 @@ func (m *Manager) Reload(newConfigs map[string]*Config) error {
 
 	for _, shutdown := range shutdownList {
 		if shutdown != nil {
-			shutdown()
+			shutdown.stop()
 		}
 	}
 
@@ -204,25 +204,22 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {	if prevConfig == nil 
 func (m *Manager) Start(name string) error {
 	m.mu.Lock()
 	inst, exists := m.instances[name]
+	m.mu.Unlock()
 	if !exists {
-		m.mu.Unlock()
 		return fmt.Errorf("process %s not found in manager registry", name)
 	}
 
-	// Dedicate startup routine
-	subCtx, cancelFunc := context.WithCancel(m.ctx)
-	inst.cancel = cancelFunc
+	runtime := newRuntime(m.ctx)
+	inst.runtime = runtime
 	spec := inst.spec
-	m.mu.Unlock()
 
-	inst.done = make(chan struct{})
 	m.wait.Add(1)
 	tracker := NewUpdateTracker(name, m.updates)
 	logger := m.logger
 	go func() {
-		defer close(inst.done)
-		defer m.wait.Done()
-		supervise(subCtx, name, spec, tracker, logger)
+		supervise(runtime.ctx, name, spec, tracker, logger)
+		close(runtime.done)
+		m.wait.Done()
 	}()
 
 	return nil
@@ -231,34 +228,23 @@ func (m *Manager) Start(name string) error {
 func (m *Manager) Stop(name string) error {
 	m.mu.Lock()
 	inst, exists := m.instances[name]
+	m.mu.Unlock()
 	if !exists {
-		m.mu.Unlock()
 		return fmt.Errorf("process %s not found in manager registry", name)
 	}
-	cancel := inst.cancel
-	m.mu.Unlock()
-	if cancel != nil {
-		// Triggers terminacePolicy()
-		cancel()
+
+	if inst.runtime != nil {
+		inst.runtime.stop()
+		<-inst.runtime.done
+		inst.runtime = nil
 	}
+
 	return nil
 }
 
 func (m *Manager) Restart(name string) error {
 	if err := m.Stop(name); err != nil {
 		return err
-	}
-	m.mu.Lock()
-	inst, exists := m.instances[name]
-	m.mu.Unlock()
-
-	if !exists {
-		return fmt.Errorf("process %s not found in manager registry", name)
-	}
-
-	if inst.done != nil {
-		// Wait for previous instance to close its done channel
-		<-inst.done
 	}
 
 	return m.Start(name)
