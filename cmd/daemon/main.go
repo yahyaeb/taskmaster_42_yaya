@@ -68,11 +68,19 @@ func main() {
 	fmt.Println("---- Taskmaster Monitoring (manager) ----")
 
 	for {
-		sig := <-sigCh
-		switch sig {
-		case syscall.SIGINT, syscall.SIGTERM:
-			logger.LogMessage(internal.LevelInfo, "received shutdown signal, exiting")
-			shutdown()
+		select {
+		case sig := <-sigCh:
+			switch sig {
+			case syscall.SIGINT, syscall.SIGTERM:
+				logger.LogMessage(internal.LevelInfo, "received shutdown signal, exiting")
+				shutdown()
+				mgr.Shutdown()
+				time.Sleep(500 * time.Microsecond)
+				logger.Close()
+				return
+			}
+		case <-ctx.Done():
+			logger.LogMessage(internal.LevelInfo, "received shutdown via RPC, exiting")
 			mgr.Shutdown()
 			time.Sleep(500 * time.Microsecond)
 			logger.Close()
