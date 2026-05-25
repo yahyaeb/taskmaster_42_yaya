@@ -123,6 +123,7 @@ programs:
       ANSWER: "42"
   hello:
     cmd: ["./testprograms/hello/hello.sh"]
+    workingdir: .
     numprocs: 1
     autostart: true
     autorestart: always
@@ -134,4 +135,3 @@ programs:
     stdout: /tmp/hello.stdout
     stderr: /tmp/hello.stderr
     env: {}
-    workingdir: /tmp

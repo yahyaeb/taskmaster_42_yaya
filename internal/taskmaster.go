@@ -81,94 +81,110 @@ func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTr
 
 	for {
 		// Startup phase: try to spawn and validate process
-		for attempt := 0; attempt <= spec.Startretries; attempt++ {
+		started := false
 
+		for attempt := 0; attempt <= spec.Startretries; attempt++ {
+			// Emit starting status
 			tracker.Emit(STARTING, 0, 0)
 
+			// Attempt process start
 			cmd, err = startProcess(spec)
 			if err != nil {
+				// Process start retry failed
 				tracker.Emit(FATAL, 0, -1)
 				continue
 			}
 
-			exitCh := make(chan error, 1)
-			go func() {
-				exitCh <- cmd.Wait()
-			}()
+			exitCh = make(chan error, 1)
+			command := cmd
+			go func(c *exec.Cmd) {
+				exitCh <- c.Wait()
+			}(command)
 
-			pid := cmd.Process.Pid
+			pid = cmd.Process.Pid
 			if logger != nil {
 				logger.LogMessage(LevelInfo, fmt.Sprintf("spawned: '%s' with pid %d", name, pid))
 			}
 
+			// Validate process startup within window
 			startupWindow := time.Duration(spec.Starttime) * time.Second
+			// Enforce minimum 1 second startup validation window
+			if startupWindow < time.Second {
+				startupWindow = time.Second
+			}
+			timer := time.NewTimer(startupWindow)
 
 			select {
 			case <-ctx.Done():
-				if logger != nil {
-					logger.LogMessage(LevelInfo, fmt.Sprintf("context canceled during startup for '%s'", name))
-				}
+				// Context cancelled during startup validation
 				_ = cmd.Process.Signal(stopSignal)
-				<-exitCh
+
+				select {
+				case <-exitCh:
+				case <-time.After(stopTimeout):
+					_ = cmd.Process.Kill()
+					<-exitCh
+				}
+
 				tracker.Emit(STOPPED, pid, 0)
 				return
+
 			case err = <-exitCh:
-				// Process exited during startup window
-				if logger != nil {
-					logger.LogMessage(LevelWarn, fmt.Sprintf("process '%s' crashed during startup (attempt %d/%d)", name, attempt, spec.Startretries))
+				// Process exited during startup validation
+				exitCode := getExitCode(err)
+				tracker.Emit(FATAL, pid, exitCode)
+				if restartPolicy(exitCode, spec) {
+					tracker.Emit(BACKOFF, pid, exitCode)
+					time.Sleep(time.Duration(1) * time.Second)
+					continue
 				}
-				tracker.Emit(FATAL, pid, getExitCode(err))
-				continue
-			case <-time.After(startupWindow):
-				// Grace period passed, process not yet exited → RUNNING
+				return
+
+			case <-timer.C:
+				// Startup validation passed
 				tracker.Emit(RUNNING, pid, 0)
-				goto Monitor
+				started = true
+			}
+
+			if started {
+				break
 			}
 		}
 
-		// All attempts exhausted
-		if logger != nil {
-			logger.LogMessage(LevelCritical, fmt.Sprintf("process '%s' failed to start after %d attempts", name, spec.Startretries))
+		if !started {
+			// All startup retries exhausted
+			if logger != nil {
+				logger.LogMessage(LevelCritical, fmt.Sprintf("process '%s' failed to start after %d attempts", name, spec.Startretries))
+			}
+			return
 		}
-		tracker.Emit(FATAL, 0, -1)
-		return
 
-	Monitor:
-		// Runtime monitoring phase: wait for exit
+		// Runtime monitoring phase
 		select {
 		case <-ctx.Done():
-			// User requested shutdown
+			// Context cancelled during runtime
 			_ = cmd.Process.Signal(stopSignal)
-			var waitErr error
+
 			select {
-			case waitErr = <-exitCh:
-				if logger != nil {
-					logger.LogMessage(LevelInfo, fmt.Sprintf("process '%s' exited cleanly", name))
-				}
+			case <-exitCh:
 			case <-time.After(stopTimeout):
-				if logger != nil {
-					logger.LogMessage(LevelWarn, fmt.Sprintf("process '%s' timed out after %v; escalating to SIGKILL", name, stopTimeout))
-				}
 				_ = cmd.Process.Kill()
-				waitErr = <-exitCh
+				<-exitCh
 			}
-			tracker.Emit(STOPPED, pid, getExitCode(waitErr))
+
+			tracker.Emit(STOPPED, pid, 0)
 			return
+
 		case err = <-exitCh:
-			// Process exited
-		}
-
-		exitCode := getExitCode(err)
-
-		if restartPolicy(exitCode, spec) {
-			if logger != nil {
-				logger.LogMessage(LevelWarn, fmt.Sprintf("process '%s' crashed (exit %d); restarting", name, exitCode))
+			// Process exited during runtime
+			exitCode := getExitCode(err)
+			tracker.Emit(STOPPED, pid, exitCode)
+			if restartPolicy(exitCode, spec) {
+				tracker.Emit(BACKOFF, pid, exitCode)
+				time.Sleep(time.Duration(1) * time.Second)
+				continue
 			}
-			tracker.Emit(BACKOFF, 0, 0)
-			continue
+			return
 		}
-
-		tracker.Emit(STOPPED, pid, exitCode)
-		return
 	}
 }
