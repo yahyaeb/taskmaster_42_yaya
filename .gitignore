@@ -8,3 +8,8 @@ testprograms/crasher/crasher
 testprograms/longrunner/longrunner
 testprograms/envreporter/envreporter
 testprograms/slowstopper/slowstopper
+crasher.stderr
+.gitignore
+memory-handler.md
+guide.md
+testprograms/ticker/ticker

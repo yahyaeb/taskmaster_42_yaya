@@ -63,7 +63,7 @@ func main() {
 	defer svr.Stop()
 
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	fmt.Println("---- Taskmaster Monitoring (manager) ----")
 
@@ -78,6 +78,16 @@ func main() {
 				time.Sleep(500 * time.Microsecond)
 				logger.Close()
 				return
+			case syscall.SIGHUP:
+				logger.LogMessage(internal.LevelInfo, "received reload signal (SIGHUP), reloading config")
+				configMap, err := internal.LoadConfig(path)
+				if err != nil {
+					logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to reload config: %v", err))
+				} else {
+					if err := mgr.Reload(configMap); err != nil {
+						logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to reload manager: %v", err))
+					}
+				}
 			}
 		case <-ctx.Done():
 			logger.LogMessage(internal.LevelInfo, "received shutdown via RPC, exiting")

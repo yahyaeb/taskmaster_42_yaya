@@ -1,60 +1,21 @@
 programs:
-  dummy-program:
-    cmd: ["echo", "Hello from dummy!"]
-    numprocs: 2
+  dummy:
+    cmd: ["sleep", "999"]
+    numprocs: 3
     autostart: true
     autorestart: unexpected
     exitcodes: [0]
     startretries: 0
-    starttime: 5
+    starttime: 1
     stopsignal: TERM
-    stoptime: 10
+    stoptime: 5
     stdout: /tmp/dummy.stdout
     stderr: /tmp/dummy.stderr
     env: {}
     workingdir: /tmp
-
-  server:
-    uid: 0
-    gid: 0
+  ticker:
     cmd: ["go", "run", "./testprograms/ticker/main.go", "4"]
-    numprocs: 1
-    umask: 022
-    workingdir: .
-    autostart: true
-    autorestart: unexpected
-    exitcodes:
-      - 0
-      - 2
-    startretries: 3
-    starttime: 5
-    stopsignal: TERM
-    stoptime: 10
-    stdout: /tmp/nginx.stdout
-    stderr: /tmp/nginx.stderr
-    env:
-      SHOW_NAME: server-demo
-      STARTED_BY: taskmaster
-      ANSWER: "42"
-
-  crasher:
-    cmd: ["./testprograms/crasher/crasher", "1"]
-    numprocs: 1
-    autostart: true
-    autorestart: never
-    exitcodes: [0]
-    startretries: 3
-    starttime: 1
-    stopsignal: TERM
-    stoptime: 2
-    stdout: crasher.stdout
-    stderr: crasher.stderr
-    env: {}
-    workingdir: .
-
-  longrunner:
-    cmd: ["./testprograms/longrunner/longrunner"]
-    numprocs: 1
+    numprocs: 2
     autostart: true
     autorestart: always
     exitcodes: [0]
@@ -62,11 +23,38 @@ programs:
     starttime: 1
     stopsignal: TERM
     stoptime: 5
-    stdout: /tmp/longrunner.stdout
-    stderr: /tmp/longrunner.stderr
+    stdout: /tmp/ticker.stdout
+    stderr: /tmp/ticker.stderr
     env: {}
     workingdir: .
-
+  lazy:
+    cmd: ["sleep", "999"]
+    numprocs: 1
+    autostart: false
+    autorestart: never
+    exitcodes: [0]
+    startretries: 0
+    starttime: 1
+    stopsignal: TERM
+    stoptime: 2
+    stdout: /tmp/lazy.stdout
+    stderr: /tmp/lazy.stderr
+    env: {}
+    workingdir: /tmp
+  crasher:
+    cmd: ["./testprograms/crasher/crasher", "1"]
+    numprocs: 1
+    autostart: false
+    autorestart: always
+    exitcodes: [0]
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 2
+    stdout: /tmp/crasher.stdout
+    stderr: /tmp/crasher.stderr
+    env: {}
+    workingdir: .
   slowstopper:
     cmd: ["./testprograms/slowstopper/slowstopper"]
     numprocs: 1
@@ -81,7 +69,6 @@ programs:
     stderr: /tmp/slowstopper.stderr
     env: {}
     workingdir: .
-
   envreporter:
     cmd: ["./testprograms/envreporter/envreporter"]
     numprocs: 1
@@ -100,3 +87,51 @@ programs:
       TM_FOO: hello
       TM_BAR: "42"
       TM_GREETING: "salut depuis taskmaster"
+  longrunner:
+    cmd: ["./testprograms/longrunner/longrunner"]
+    numprocs: 1
+    autostart: true
+    autorestart: always
+    exitcodes: [0]
+    startretries: 3
+    starttime: 1
+    stopsignal: TERM
+    stoptime: 5
+    stdout: /tmp/longrunner.stdout
+    stderr: /tmp/longrunner.stderr
+    env: {}
+    workingdir: .
+  server:
+    uid: 1000
+    gid: 1000
+    cmd: ["sleep", "999"]
+    numprocs: 1
+    umask: 022
+    workingdir: .
+    autostart: true
+    autorestart: unexpected
+    exitcodes: [0]
+    startretries: 3
+    starttime: 5
+    stopsignal: TERM
+    stoptime: 10
+    stdout: /tmp/server.stdout
+    stderr: /tmp/server.stderr
+    env:
+      SHOW_NAME: server-demo
+      STARTED_BY: taskmaster
+      ANSWER: "42"
+  # hello:
+  #   cmd: ["./testprograms/hello/hello.sh"]
+  #   numprocs: 1
+  #   autostart: true
+  #   autorestart: never
+  #   exitcodes: [0]
+  #   startretries: 0
+  #   starttime: 0
+  #   stopsignal: TERM
+  #   stoptime: 2
+  #   stdout: /tmp/hello.stdout
+  #   stderr: /tmp/hello.stderr
+  #   env: {}
+  #   workingdir: /tmp

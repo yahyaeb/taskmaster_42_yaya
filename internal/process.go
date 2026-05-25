@@ -65,6 +65,8 @@ func startProcess(config *Config) (*exec.Cmd, error) {
 
 	privileged(config, cmd)
 
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
 	cmd.Dir = config.Workingdir
 	cmd.Env = environment(config.Env)
 

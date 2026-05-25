@@ -1,10 +1,3 @@
-// Ticker exits after printing a few timestamps—useful to smoke-test startProcess + Wait
-// without a long-lived server or external paths.
-//
-// Usage: ticker [ticks]
-//
-//	env SHOW_NAME overrides the printed label (YAML can set env for the child).
-
 package main
 
 import (
@@ -15,24 +8,17 @@ import (
 )
 
 func main() {
-	ticks := 4
+	interval := 1
 	if len(os.Args) > 1 {
-		n, err := strconv.Atoi(os.Args[1])
-		if err != nil || n < 1 {
-			fmt.Fprintf(os.Stderr, "usage: ticker [ticks], ticks must be >= 1\n")
-			os.Exit(2)
-		}
-		ticks = n
+		interval, _ = strconv.Atoi(os.Args[1])
 	}
 
-	name := os.Getenv("SHOW_NAME")
-	if name == "" {
-		name = "ticker"
-	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Second)
+	defer ticker.Stop()
 
-	for i := 1; i <= ticks; i++ {
-		fmt.Printf("%s [%d/%d]\n", name, i, ticks)
-		time.Sleep(300 * time.Millisecond)
+	count := 0
+	for range ticker.C {
+		count++
+		fmt.Printf("[%s] tick %d\n", time.Now().Format("2006-01-02 15:04:05"), count)
 	}
-
 }
