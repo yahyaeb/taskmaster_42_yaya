@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+// DefaultBackoffDelay is the sleep duration used before retrying after a backoff or restart.
+const DefaultBackoffDelay = time.Second
+
 type Status string
 
 const (
@@ -148,7 +151,7 @@ func waitForStartup(processInfo *processInfo, name string, logger *Logger) (*exe
 			processInfo.tracker.Emit(FATAL, pid, exitCode)
 			if restartPolicy(exitCode, processInfo.spec) {
 				processInfo.tracker.Emit(BACKOFF, pid, exitCode)
-				time.Sleep(time.Second)
+				time.Sleep(DefaultBackoffDelay)
 				continue
 			}
 			return nil, nil, 0, false
@@ -216,6 +219,6 @@ func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTr
 		if !shouldRestart {
 			return
 		}
-		time.Sleep(time.Second)
+		time.Sleep(DefaultBackoffDelay)
 	}
 }
