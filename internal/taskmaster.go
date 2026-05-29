@@ -23,6 +23,15 @@ const (
 	BACKOFF  Status = "backoff"
 )
 
+// AutorestartPolicy defines the possible values for the Autorestart configuration field.
+type AutorestartPolicy string
+
+const (
+	AutorestartAlways     AutorestartPolicy = "always"
+	AutorestartNever      AutorestartPolicy = "never"
+	AutorestartUnexpected AutorestartPolicy = "unexpected"
+)
+
 type ProcessUpdate struct {
 	Name      string
 	Status    Status
@@ -79,12 +88,13 @@ func stopProcess(cmd *exec.Cmd, stopSignal os.Signal, stopTimeout time.Duration,
 }
 
 func restartPolicy(exitCode int, spec *Config) bool {
-	switch spec.Autorestart {
-	case "always":
+	policy := AutorestartPolicy(spec.Autorestart)
+	switch policy {
+	case AutorestartAlways:
 		return true
-	case "never":
+	case AutorestartNever:
 		return false
-	case "unexpected":
+	case AutorestartUnexpected:
 		return !slices.Contains(spec.Exitcodes, exitCode)
 	}
 	return false
