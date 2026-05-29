@@ -54,12 +54,17 @@ type processInfo struct {
 }
 
 func (t *UpdateTracker) Emit(status Status, pid int, exitCode int) {
-	t.updates <- ProcessUpdate{
+	update := ProcessUpdate{
 		Name:      t.name,
 		Status:    status,
 		Pid:       pid,
 		ExitCode:  exitCode,
 		LastStart: time.Now(),
+	}
+	select {
+	case t.updates <- update:
+	default:
+		// Channel full or consumer unavailable; discard to avoid blocking the supervisor
 	}
 }
 
