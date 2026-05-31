@@ -7,7 +7,6 @@ import (
 	"os/signal"
 	"syscall"
 	"taskmaster/internal"
-	"time"
 )
 
 func startLogger() *internal.Logger {
@@ -73,31 +72,15 @@ func main() {
 		case sig := <-sigCh:
 			switch sig {
 			case syscall.SIGINT, syscall.SIGTERM:
-				logger.LogMessage(internal.LevelInfo, "received shutdown signal, exiting")
-				shutdown()
-				mgr.Shutdown()
-				time.Sleep(500 * time.Microsecond)
-				logger.Close()
+				internal.Exit(logger, mgr, shutdown, fmt.Sprintf("received shutdown signal (%s), exiting", sig))
 				return
 			case syscall.SIGHUP:
-				logger.LogMessage(internal.LevelInfo, "received reload signal (SIGHUP), reloading config")
-				newMap, newMemGuard, err := internal.LoadConfig(path)
-				if err != nil {
-					logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to reload config: %v", err))
-				} else {
-					if err := mgr.Reload(newMap); err != nil {
-						logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to reload manager: %v", err))
-					} else {
-						svr.SetMemoryGuardConfig(newMemGuard)
-						memGuardCfg = newMemGuard
-					}
+				if err := internal.HotWire(path, mgr, svr, logger); err != nil {
+					logger.LogMessage(internal.LevelError, fmt.Sprintf("config reload failed: %v", err))
 				}
 			}
 		case <-ctx.Done():
-			logger.LogMessage(internal.LevelInfo, "received shutdown via RPC, exiting")
-			mgr.Shutdown()
-			time.Sleep(500 * time.Microsecond)
-			logger.Close()
+			internal.Exit(logger, mgr, shutdown, "received shutdown via RPC, exiting")
 			return
 		}
 	}
