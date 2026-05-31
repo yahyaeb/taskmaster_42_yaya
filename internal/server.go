@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"sync"
 )
 
 type RPCRequest struct {
@@ -21,21 +22,30 @@ type RPCResponse struct {
 }
 
 type Server struct {
-	listener   net.Listener
-	mgr        *Manager
-	socketPath string
-	configPath string
-	exitRoot   context.CancelFunc
+	listener    net.Listener
+	mgr         *Manager
+	socketPath  string
+	configPath  string
+	memGuardCfg MemoryGuardConfig
+	cfgMu       sync.RWMutex
+	exitRoot    context.CancelFunc
 }
 
-func NewServer(socketPath string, mgr *Manager, configPath string, exitRoot context.CancelFunc) (*Server, error) {
+func NewServer(socketPath string, mgr *Manager, configPath string, memGuardCfg MemoryGuardConfig, exitRoot context.CancelFunc) (*Server, error) {
 	_ = os.Remove(socketPath)
 	l, err := net.Listen("unix", socketPath)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Server{listener: l, mgr: mgr, socketPath: socketPath, configPath: configPath, exitRoot: exitRoot}, nil
+	return &Server{listener: l, mgr: mgr, socketPath: socketPath, configPath: configPath, memGuardCfg: memGuardCfg, exitRoot: exitRoot}, nil
+}
+
+// SetMemoryGuardConfig updates the server's memory guard configuration under lock.
+func (s *Server) SetMemoryGuardConfig(cfg MemoryGuardConfig) {
+	s.cfgMu.Lock()
+	s.memGuardCfg = cfg
+	s.cfgMu.Unlock()
 }
 
 func (s *Server) Serve() error {
@@ -107,7 +117,7 @@ func (s *Server) dispatch(req RPCRequest) (RPCResponse, func()) {
 		}
 
 	case "reload":
-		cfg, err := LoadConfig(s.configPath)
+		cfg, memGuard, err := LoadConfig(s.configPath)
 		if err != nil {
 			resp.Error = err.Error()
 			break
@@ -115,6 +125,9 @@ func (s *Server) dispatch(req RPCRequest) (RPCResponse, func()) {
 		if err := s.mgr.Reload(cfg); err != nil {
 			resp.Error = err.Error()
 		} else {
+			s.cfgMu.Lock()
+			s.memGuardCfg = memGuard
+			s.cfgMu.Unlock()
 			resp.Result = "ok"
 		}
 
@@ -124,6 +137,16 @@ func (s *Server) dispatch(req RPCRequest) (RPCResponse, func()) {
 			if s.exitRoot != nil {
 				s.exitRoot()
 			}
+		}
+
+	case "memory_guard_status":
+		s.cfgMu.RLock()
+		cfg := s.memGuardCfg
+		s.cfgMu.RUnlock()
+		resp.Result = map[string]any{
+			"enabled":   cfg.Enabled,
+			"threshold": cfg.Threshold,
+			"interval":  cfg.Interval,
 		}
 
 	default:

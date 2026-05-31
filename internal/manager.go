@@ -30,22 +30,59 @@ func getStopSignal(signalStr string) os.Signal {
 	}
 }
 
-type Instance struct {
-	spec      *Config
-	status    Status
-	pid       int
-	exitCode  int
-	runtime   *Runtime
-	lastStart time.Time
+type command interface{}
+
+type start struct {
+	name  string
+	reply chan error
+}
+
+type stop struct {
+	name  string
+	reply chan error
+}
+
+type status struct {
+	reply chan []StatusReport
+}
+
+type running struct {
+	reply chan []RunningInstance
+}
+
+type load struct {
+	configs map[string]*Config
+	reply   chan error
+}
+
+type reload struct {
+	configs map[string]*Config
+	reply   chan error
+}
+
+type shutdown struct {
+	reply chan struct{}
 }
 
 type Manager struct {
-	mu        sync.Mutex
-	instances map[string]*Instance
-	updates   chan ProcessUpdate
-	ctx       context.Context
-	wait      sync.WaitGroup
-	logger    *Logger
+	cmd     chan command
+	updates chan ProcessUpdate
+	ctx     context.Context
+	wait    sync.WaitGroup
+	logger  *Logger
+}
+
+type Instance struct {
+	spec    *Config
+	runtime *Runtime
+	state   ProcessInstance
+}
+
+type ProcessInstance struct {
+	Status    Status
+	Pid       int
+	ExitCode  int
+	LastStart time.Time
 }
 
 type StatusReport struct {
@@ -58,103 +95,22 @@ type StatusReport struct {
 
 func CreateManager(ctx context.Context) *Manager {
 	m := &Manager{
-		instances: make(map[string]*Instance),
-		updates:   make(chan ProcessUpdate, 100),
-		ctx:       ctx,
+		cmd:     make(chan command, 100),
+		updates: make(chan ProcessUpdate, 100),
+		ctx:     ctx,
 	}
-	go m.updateManagerInstances()
+	go m.eventLoop()
 	return m
 }
 
-// SetLogger configures an optional logger for process updates.
 func (m *Manager) SetLogger(logger *Logger) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	m.logger = logger
 }
 
-func (m *Manager) updateManagerInstances() {
-	for update := range m.updates {
-		m.mu.Lock()
-		instance, exists := m.instances[update.Name]
-		if exists {
-			instance.status = update.Status
-			instance.pid = update.Pid
-			instance.exitCode = update.ExitCode
-			if update.Status == RUNNING && !update.LastStart.IsZero() {
-				instance.lastStart = update.LastStart
-			}
-		}
-		logger := m.logger
-		m.mu.Unlock()
-
-		// Send to logger if configured
-		if logger != nil {
-			logger.Log(update)
-		}
-	}
-}
-
-func (m *Manager) Reload(newConfigs map[string]*Config) error {
-
-	type start struct {
-		name   string
-		config *Config
-	}
-	var startList []start
-
-	var shutdownList []*Runtime
-
-	m.mu.Lock()
-	for name, inst := range m.instances {
-		newConfig, exists := newConfigs[name]
-		if !exists {
-			shutdownList = append(shutdownList, inst.runtime)
-			delete(m.instances, name)
-			continue
-		}
-
-		if isConfigChanged(inst.spec, newConfig) {
-			shutdownList = append(shutdownList, inst.runtime)
-			delete(m.instances, name)
-			startList = append(startList, start{name: name, config: newConfig})
-			continue
-		}
-
-		inst.spec = newConfig
-
-	}
-
-	for name, config := range newConfigs {
-		if _, exists := m.instances[name]; exists {
-			continue
-		}
-
-		m.instances[name] = &Instance{
-			spec:   config,
-			status: STOPPED,
-		}
-
-		startList = append(startList, start{name: name, config: config})
-	}
-
-	m.mu.Unlock()
-
-	for _, shutdown := range shutdownList {
-		if shutdown != nil {
-			shutdown.stop()
-		}
-	}
-
-	for _, s := range startList {
-		if err := m.Start(s.name); err != nil {
-			if logger := m.logger; logger != nil {
-				logger.LogMessage(LevelError, fmt.Sprintf("failed to start process %s during reload: %v", s.name, err))
-			}
-		}
-	}
-
-	return nil
+// RunningInstance is a read-only snapshot of a RUNNING process.
+type RunningInstance struct {
+	Name     string
+	Priority string // "low", "medium", or "high"
 }
 
 func isConfigChanged(prevConfig, newConfig *Config) bool {
@@ -202,45 +158,178 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {
 	return false
 }
 
-func (m *Manager) Start(name string) error {
-	m.mu.Lock()
-	inst, exists := m.instances[name]
-	m.mu.Unlock()
-	if !exists {
-		return fmt.Errorf("process %s not found in manager registry", name)
-	}
+func (m *Manager) eventLoop() {
+	instances := make(map[string]*Instance)
 
-	runtime := newRuntime(m.ctx)
-	inst.runtime = runtime
-	spec := inst.spec
+	for {
+		select {
+
+		case update := <-m.updates:
+			if inst, exists := instances[update.Name]; exists {
+				inst.state.Status = update.Status
+				inst.state.Pid = update.Pid
+				inst.state.ExitCode = update.ExitCode
+				if update.Status == RUNNING && !update.EventTime.IsZero() {
+					inst.state.LastStart = update.EventTime
+				}
+			}
+			if m.logger != nil {
+				m.logger.Log(update)
+			}
+		case cmd := <-m.cmd:
+			switch c := cmd.(type) {
+			case start:
+				inst, exist := instances[c.name]
+				if !exist {
+					c.reply <- fmt.Errorf("process %s not found in manager registry", c.name)
+					break
+				}
+				if inst.runtime != nil {
+					c.reply <- fmt.Errorf("process %s is already running", c.name)
+					break
+				}
+				m.initSupervise(c.name, inst)
+				c.reply <- nil
+			case stop:
+				inst, exist := instances[c.name]
+				if !exist {
+					c.reply <- fmt.Errorf("process %s not found in manager registry", c.name)
+					break
+				}
+				rt := inst.runtime
+				inst.runtime = nil
+				c.reply <- nil
+				stopWaitRuntime(rt)
+			case status:
+				reports := make([]StatusReport, 0, len(instances))
+				for name, inst := range instances {
+					reports = append(reports, StatusReport{
+						Name:     name,
+						Status:   inst.state.Status,
+						Pid:      inst.state.Pid,
+						ExitCode: inst.state.ExitCode,
+						Uptime:   formatUptime(inst.state.LastStart),
+					})
+				}
+				c.reply <- reports
+			case running:
+				var running []RunningInstance
+				for name, inst := range instances {
+					if inst.state.Status == RUNNING {
+						running = append(running, RunningInstance{
+							Name:     name,
+							Priority: inst.spec.MemoryPriority,
+						})
+					}
+				}
+				c.reply <- running
+			case load:
+				var autostart []string
+				for name, spec := range c.configs {
+					instances[name] = &Instance{
+						spec:  spec,
+						state: ProcessInstance{Status: STOPPED},
+					}
+					if spec.Autostart {
+						autostart = append(autostart, name)
+					}
+				}
+				c.reply <- nil
+				for _, name := range autostart {
+					m.initSupervise(name, instances[name])
+				}
+			case reload:
+				sequence := Restarting(instances, c.configs)
+
+				var toStop []*Runtime
+				var toStart []string
+
+				for _, name := range sequence.Update {
+					instances[name].spec = c.configs[name]
+				}
+
+				for _, name := range sequence.Stop {
+					inst := instances[name]
+					toStop = append(toStop, inst.runtime)
+					inst.runtime = nil
+					delete(instances, name)
+				}
+
+				for _, name := range sequence.Restart {
+					inst := instances[name]
+					toStop = append(toStop, inst.runtime)
+					instances[name] = &Instance{
+						spec:  c.configs[name],
+						state: ProcessInstance{Status: STOPPED},
+					}
+					toStart = append(toStart, name)
+				}
+
+				for _, name := range sequence.Start {
+					instances[name] = &Instance{
+						spec:  c.configs[name],
+						state: ProcessInstance{Status: STOPPED},
+					}
+
+					toStart = append(toStart, name)
+				}
+
+				c.reply <- nil
+
+				for _, rt := range toStop {
+					stopWaitRuntime(rt)
+				}
+
+				for _, name := range toStart {
+					m.initSupervise(name, instances[name])
+				}
+
+			case shutdown:
+				c.reply <- struct{}{}
+				return
+			}
+		}
+
+	}
+}
+
+func stopWaitRuntime(rt *Runtime) {
+	if rt != nil {
+		rt.stop()
+		<-rt.done
+	}
+}
+
+func (m *Manager) initSupervise(name string, inst *Instance) {
+	rt := newRuntime(m.ctx)
+	inst.runtime = rt
 
 	m.wait.Add(1)
 	tracker := &UpdateTracker{name: name, updates: m.updates}
 	logger := m.logger
 	go func() {
-		supervise(runtime.ctx, name, spec, tracker, logger)
-		close(runtime.done)
+		supervise(rt.ctx, name, inst.spec, tracker, logger)
+		close(rt.done)
 		m.wait.Done()
 	}()
+}
 
-	return nil
+func (m *Manager) GetRunningInstances() []RunningInstance {
+	reply := make(chan []RunningInstance, 1)
+	m.cmd <- running{reply: reply}
+	return <-reply
+}
+
+func (m *Manager) Start(name string) error {
+	reply := make(chan error, 1)
+	m.cmd <- start{name: name, reply: reply}
+	return <-reply
 }
 
 func (m *Manager) Stop(name string) error {
-	m.mu.Lock()
-	inst, exists := m.instances[name]
-	m.mu.Unlock()
-	if !exists {
-		return fmt.Errorf("process %s not found in manager registry", name)
-	}
-
-	if inst.runtime != nil {
-		inst.runtime.stop()
-		<-inst.runtime.done
-		inst.runtime = nil
-	}
-
-	return nil
+	reply := make(chan error, 1)
+	m.cmd <- stop{name: name, reply: reply}
+	return <-reply
 }
 
 func (m *Manager) Restart(name string) error {
@@ -252,50 +341,27 @@ func (m *Manager) Restart(name string) error {
 }
 
 func (m *Manager) Status() []StatusReport {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	reports := make([]StatusReport, 0, len(m.instances))
-	for name, inst := range m.instances {
-		reports = append(reports, StatusReport{
-			Name:     name,
-			Status:   inst.status,
-			Pid:      inst.pid,
-			ExitCode: inst.exitCode,
-			Uptime:   formatUptime(inst.lastStart),
-		})
-	}
-	return reports
+	reply := make(chan []StatusReport, 1)
+	m.cmd <- status{reply: reply}
+	return <-reply
 }
 
 func (m *Manager) Load(specs map[string]*Config) error {
+	reply := make(chan error, 1)
+	m.cmd <- load{configs: specs, reply: reply}
+	return <-reply
+}
 
-	var autostart []string
-
-	m.mu.Lock()
-	for name, spec := range specs {
-		m.instances[name] = &Instance{
-			spec:   spec,
-			status: STOPPED,
-		}
-
-		if spec.Autostart {
-			autostart = append(autostart, name)
-		}
-	}
-	m.mu.Unlock()
-
-	for _, name := range autostart {
-		if err := m.Start(name); err != nil {
-			if logger := m.logger; logger != nil {
-				logger.LogMessage(LevelError, fmt.Sprintf("failed to auto-start process %s: %v", name, err))
-			}
-		}
-	}
-
-	return nil
+func (m *Manager) Reload(newConfigs map[string]*Config) error {
+	reply := make(chan error, 1)
+	m.cmd <- reload{configs: newConfigs, reply: reply}
+	return <-reply
 }
 
 func (m *Manager) Shutdown() {
+	reply := make(chan struct{}, 1)
+	m.cmd <- shutdown{reply: reply}
+	<-reply
 	m.wait.Wait()
 	close(m.updates)
 }

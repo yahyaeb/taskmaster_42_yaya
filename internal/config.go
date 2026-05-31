@@ -32,6 +32,13 @@ type Config struct {
 	Env           map[string]string `yaml:"env"`
 	Uid           *uint32           `yaml:"uid"`
 	Gid           *uint32           `yaml:"gid"`
+	MemoryPriority string            `yaml:"memory_priority"`
+}
+
+type MemoryGuardConfig struct {
+	Enabled   bool    `yaml:"enabled"`
+	Threshold float64 `yaml:"threshold"` // 0–100, system memory usage %
+	Interval  int     `yaml:"interval"`  // seconds between checks
 }
 
 func validateOutputPath(kind, path string) error {
@@ -118,6 +125,18 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("executable %q not found in PATH: %w", c.Cmd[0], err)
 	}
 
+	// Normalize and validate memory_priority
+	if c.MemoryPriority == "" {
+		c.MemoryPriority = "medium"
+	}
+	c.MemoryPriority = strings.ToLower(c.MemoryPriority)
+	switch c.MemoryPriority {
+	case "low", "medium", "high":
+		// valid
+	default:
+		return fmt.Errorf("memory_priority must be one of: low, medium, high, got %q", c.MemoryPriority)
+	}
+
 	return nil
 }
 
@@ -143,36 +162,48 @@ func ExpandPrograms(programs map[string]Config) map[string]*Config {
 	return out
 }
 
-func LoadConfig(path string) (map[string]*Config, error) {
+func LoadConfig(path string) (map[string]*Config, MemoryGuardConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config file %s: %w", path, err)
+		return nil, MemoryGuardConfig{}, fmt.Errorf("read config file %s: %w", path, err)
 	}
 
-	var programs struct {
-		ConfigMap map[string]Config `yaml:"programs"`
+	var top struct {
+		MemoryGuard MemoryGuardConfig `yaml:"memory_guard"`
+		ConfigMap   map[string]Config `yaml:"programs"`
 	}
 
-	if err := yaml.Unmarshal(data, &programs); err != nil {
-		return nil, fmt.Errorf(`parse yaml: %w`, err)
+	if err := yaml.Unmarshal(data, &top); err != nil {
+		return nil, MemoryGuardConfig{}, fmt.Errorf(`parse yaml: %w`, err)
 	}
 
-	if programs.ConfigMap == nil {
-		return nil, fmt.Errorf("missing programs")
+	if top.ConfigMap == nil {
+		return nil, MemoryGuardConfig{}, fmt.Errorf("missing programs")
 	}
 
-	for name, config := range programs.ConfigMap {
+	for name, config := range top.ConfigMap {
 		config.Program = name
-		programs.ConfigMap[name] = config
+		top.ConfigMap[name] = config
 	}
 
-	for name, config := range programs.ConfigMap {
+	for name, config := range top.ConfigMap {
 		if err := config.Validate(); err != nil {
-			return nil, fmt.Errorf("validate spec %q: %w", name, err)
+			return nil, MemoryGuardConfig{}, fmt.Errorf("validate spec %q: %w", name, err)
 		}
 	}
 
-	expanded := ExpandPrograms(programs.ConfigMap)
+	expanded := ExpandPrograms(top.ConfigMap)
 
-	return expanded, nil
+	// Validate memory guard config only if enabled
+	memGuard := top.MemoryGuard
+	if memGuard.Enabled {
+		if memGuard.Threshold < 1 || memGuard.Threshold > 99 {
+			return nil, MemoryGuardConfig{}, fmt.Errorf("memory_guard.threshold must be between 1 and 99, got %.1f", memGuard.Threshold)
+		}
+		if memGuard.Interval < 1 {
+			return nil, MemoryGuardConfig{}, fmt.Errorf("memory_guard.interval must be >= 1, got %d", memGuard.Interval)
+		}
+	}
+
+	return expanded, memGuard, nil
 }

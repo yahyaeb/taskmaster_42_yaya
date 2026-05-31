@@ -37,7 +37,7 @@ type ProcessUpdate struct {
 	Status    Status
 	Pid       int
 	ExitCode  int
-	LastStart time.Time
+	EventTime time.Time
 }
 
 type UpdateTracker struct {
@@ -59,7 +59,7 @@ func (t *UpdateTracker) Emit(status Status, pid int, exitCode int) {
 		Status:    status,
 		Pid:       pid,
 		ExitCode:  exitCode,
-		LastStart: time.Now(),
+		EventTime: time.Now(),
 	}
 	select {
 	case t.updates <- update:
@@ -105,7 +105,7 @@ func restartPolicy(exitCode int, spec *Config) bool {
 	return false
 }
 
-func launchProcess(spec *Config, tracker *UpdateTracker) (*exec.Cmd, chan error, error) {
+func tryStartProcess(spec *Config, tracker *UpdateTracker) (*exec.Cmd, chan error, error) {
 	cmd, err := startProcess(spec)
 	if err != nil {
 		// Process start retry failed
@@ -134,7 +134,7 @@ func waitForStartup(processInfo *processInfo, name string, logger *Logger) (*exe
 		processInfo.tracker.Emit(STARTING, 0, 0)
 
 		// Attempt process start
-		cmd, exitCh, err = launchProcess(processInfo.spec, processInfo.tracker)
+		cmd, exitCh, err = tryStartProcess(processInfo.spec, processInfo.tracker)
 		if err != nil {
 			continue
 		}
@@ -173,7 +173,6 @@ func waitForStartup(processInfo *processInfo, name string, logger *Logger) (*exe
 
 		case <-timer.C:
 			// Startup validation passed
-			timer.Stop()
 			processInfo.tracker.Emit(RUNNING, pid, 0)
 			started = true
 		}
@@ -194,23 +193,39 @@ func waitForStartup(processInfo *processInfo, name string, logger *Logger) (*exe
 	return cmd, exitCh, pid, true
 }
 
-func monitorRuntime(processInfo *processInfo, cmd *exec.Cmd, exitCh chan error, pid int) bool {
+func monitorRuntime(processInfo *processInfo, cmd *exec.Cmd, exitCh chan error, pid int) LifecycleEvent {
 	select {
 	case <-processInfo.ctx.Done():
 		// Context cancelled during runtime
 		exitCode := stopProcess(cmd, processInfo.stopSignal, processInfo.stopTimeout, exitCh)
 		processInfo.tracker.Emit(STOPPED, pid, exitCode)
-		return false
+		return LifecycleEvent{
+			Action:   ActionStop,
+			Pid:      pid,
+			ExitCode: exitCode,
+		}
 
 	case err := <-exitCh:
 		// Process exited during runtime
 		exitCode := getExitCode(err)
+
 		processInfo.tracker.Emit(STOPPED, pid, exitCode)
+
 		if restartPolicy(exitCode, processInfo.spec) {
+
 			processInfo.tracker.Emit(BACKOFF, pid, exitCode)
-			return true
+
+			return LifecycleEvent{
+				Action:   ActionRestart,
+				Pid:      pid,
+				ExitCode: exitCode,
+			}
 		}
-		return false
+		return LifecycleEvent{
+			Action:   ActionStop,
+			Pid:      pid,
+			ExitCode: exitCode,
+		}
 	}
 }
 
@@ -230,10 +245,13 @@ func supervise(ctx context.Context, name string, spec *Config, tracker *UpdateTr
 			return
 		}
 
-		shouldRestart := monitorRuntime(processInfo, cmd, exitCh, pid)
-		if !shouldRestart {
+		result := monitorRuntime(processInfo, cmd, exitCh, pid)
+
+		switch result.Action {
+		case ActionStop:
 			return
+		case ActionRestart:
+			time.Sleep(DefaultBackoffDelay)
 		}
-		time.Sleep(DefaultBackoffDelay)
 	}
 }

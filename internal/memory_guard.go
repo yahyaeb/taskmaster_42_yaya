@@ -1,0 +1,111 @@
+package internal
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"time"
+)
+
+// RunMemoryGuard starts a background loop that monitors system memory usage.
+// When usage exceeds cfg.Threshold, it kills the lowest-priority RUNNING process.
+// Returns immediately if cfg.Enabled is false.
+//
+// Important: the guard captures cfg by value at startup and runs with those
+// values for its entire lifetime. Changes to threshold or interval via config
+// reload have no effect on a running guard; a daemon restart is required for
+// those changes to take effect. Hot-reload of guard parameters is a follow-up.
+func RunMemoryGuard(ctx context.Context, cfg MemoryGuardConfig, mgr *Manager, logger *Logger) {
+	if !cfg.Enabled {
+		return
+	}
+
+	interval := time.Duration(cfg.Interval) * time.Second
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			usage, err := MemoryUsagePercent()
+			if err != nil {
+				if logger != nil {
+					logger.LogMessage(LevelWarn, fmt.Sprintf("memory guard: failed to read memory usage: %v", err))
+				}
+				continue
+			}
+			if usage >= cfg.Threshold {
+				killLowestPriority(mgr, logger)
+			}
+		}
+	}
+}
+
+// priorityRank maps a priority string to a numeric rank and whether it is known.
+func priorityRank(p string) (int, bool) {
+	switch p {
+	case "low":
+		return 0, true
+	case "medium":
+		return 1, true
+	case "high":
+		return 2, true
+	default:
+		return 1, false
+	}
+}
+
+// killLowestPriority selects the RUNNING process with the lowest memory_priority
+// and stops it. If multiple processes share the lowest rank, picks alphabetically.
+func killLowestPriority(mgr *Manager, logger *Logger) {
+	instances := mgr.GetRunningInstances()
+	if len(instances) == 0 {
+		if logger != nil {
+			logger.LogMessage(LevelWarn, "memory guard: no RUNNING processes to kill")
+		}
+		return
+	}
+
+	type candidate struct {
+		name     string
+		priority int
+	}
+
+	candidates := make([]candidate, 0, len(instances))
+	for _, inst := range instances {
+		rank, known := priorityRank(inst.Priority)
+		if !known && logger != nil {
+			logger.LogMessage(LevelWarn, fmt.Sprintf(
+				"memory guard: process %q has invalid memory_priority %q (treated as medium)",
+				inst.Name, inst.Priority,
+			))
+		}
+		candidates = append(candidates, candidate{name: inst.Name, priority: rank})
+	}
+
+	// Sort by priority ascending, then alphabetically for determinism
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].priority != candidates[j].priority {
+			return candidates[i].priority < candidates[j].priority
+		}
+		return candidates[i].name < candidates[j].name
+	})
+
+	victim := candidates[0].name
+
+	if err := mgr.Stop(victim); err != nil {
+		if logger != nil {
+			logger.LogMessage(LevelError, fmt.Sprintf("memory guard: failed to kill %q: %v", victim, err))
+		}
+		return
+	}
+
+	if logger != nil {
+		logger.LogMessage(LevelWarn, fmt.Sprintf(
+			"memory guard: killed %q (lowest priority, system memory exceeded threshold)",
+			victim,
+		))
+	}
+}

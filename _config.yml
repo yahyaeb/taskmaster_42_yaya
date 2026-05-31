@@ -1,0 +1,36 @@
+memory_guard:
+  enabled: true
+  threshold: 80
+  interval: 10
+
+programs:
+  firefox:
+    cmd: ["firefox"]
+    numprocs: 1
+    autostart: false
+    autorestart: never  
+    exitcodes: [0]
+    startretries: 3
+    starttime: 1
+    stopsignal: TERM
+    stoptime: 5
+    stdout: /tmp/firefox.stdout
+    stderr: /tmp/firefox.stderr
+    env: {}
+    workingdir: /tmp
+    memory_priority: low
+  chrome:
+    cmd: ["google-chrome"]
+    numprocs: 1
+    autostart: false
+    autorestart: never
+    exitcodes: [0]
+    startretries: 3
+    starttime: 1
+    stopsignal: TERM
+    stoptime: 5
+    stdout: /tmp/chrome.stdout
+    stderr: /tmp/chrome.stderr
+    env: {}
+    workingdir: /tmp
+    memory_priority: low

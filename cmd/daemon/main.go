@@ -22,9 +22,8 @@ func startLogger() *internal.Logger {
 }
 
 func main() {
-
 	path := "config.yml"
-	configMap, err := internal.LoadConfig(path)
+	configMap, memGuardCfg, err := internal.LoadConfig(path)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -46,7 +45,9 @@ func main() {
 		return
 	}
 
-	svr, err := internal.NewServer("/tmp/taskmaster.sock", mgr, path, shutdown)
+	go internal.RunMemoryGuard(ctx, memGuardCfg, mgr, logger)
+
+	svr, err := internal.NewServer("/tmp/taskmaster.sock", mgr, path, memGuardCfg, shutdown)
 	if err != nil {
 		logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to create server: %v", err))
 		shutdown()
@@ -80,12 +81,15 @@ func main() {
 				return
 			case syscall.SIGHUP:
 				logger.LogMessage(internal.LevelInfo, "received reload signal (SIGHUP), reloading config")
-				configMap, err := internal.LoadConfig(path)
+				newMap, newMemGuard, err := internal.LoadConfig(path)
 				if err != nil {
 					logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to reload config: %v", err))
 				} else {
-					if err := mgr.Reload(configMap); err != nil {
+					if err := mgr.Reload(newMap); err != nil {
 						logger.LogMessage(internal.LevelError, fmt.Sprintf("failed to reload manager: %v", err))
+					} else {
+						svr.SetMemoryGuardConfig(newMemGuard)
+						memGuardCfg = newMemGuard
 					}
 				}
 			}
