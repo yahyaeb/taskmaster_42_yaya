@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"taskmaster/test_taskmaster/helpers"
+	"taskmaster/test_taskmaster/config"
 )
 
 func RunPoint2(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("POINT 2 — Configuration File (autostart & numprocs)")
 
 	// Wait briefly for autostart to kick in
-	time.Sleep(1 * time.Second)
+	time.Sleep(config.StopWaitTimeout)
 
 	// Since config.yml has dummy with numprocs: 3 and autostart: true
 	stOut, err := helpers.RunCtl(ctx, "status")
@@ -27,7 +28,7 @@ func RunPoint2(ctx *helpers.TestContext, r *helpers.Report) {
 	}
 
 	// 2. Check autostart works
-	stMap, _ := helpers.WaitForStatus(ctx, 2*time.Second, func(m map[string]helpers.ProcStatus) bool {
+	stMap, _ := helpers.WaitForStatus(ctx, config.AutostartWaitTimeout, func(m map[string]helpers.ProcStatus) bool {
 		p, ok := m["dummy:00"]
 		return ok && p.State == "running"
 	})
