@@ -15,19 +15,17 @@ programs:
     workingdir: /tmp
 
   server:
-    uid: 0
-    gid: 0
-    cmd: ["go", "run", "./testprograms/ticker/main.go", "4"]
+    cmd: ["SERVER_SH_PATH"]
     numprocs: 1
     umask: 022
-    workingdir: .
+    workingdir: WORKDIR
     autostart: true
     autorestart: unexpected
     exitcodes:
       - 0
       - 2
     startretries: 3
-    starttime: 5
+    starttime: 2
     stopsignal: TERM
     stoptime: 10
     stdout: /tmp/nginx.stdout
@@ -38,7 +36,7 @@ programs:
       ANSWER: "42"
 
   crasher:
-    cmd: ["./testprograms/crasher/crasher", "1"]
+    cmd: ["CRASHER_PATH", "1"]
     numprocs: 1
     autostart: false
     autorestart: unexpected
@@ -47,13 +45,13 @@ programs:
     starttime: 1
     stopsignal: TERM
     stoptime: 2
-    stdout: crasher.stdout
-    stderr: crasher.stderr
+    stdout: /tmp/crasher.stdout
+    stderr: /tmp/crasher.stderr
     env: {}
-    workingdir: .
+    workingdir: WORKDIR
 
   longrunner:
-    cmd: ["./testprograms/longrunner/longrunner"]
+    cmd: ["LONGRUNNER_PATH"]
     numprocs: 1
     autostart: true
     autorestart: always
@@ -65,10 +63,10 @@ programs:
     stdout: /tmp/longrunner.stdout
     stderr: /tmp/longrunner.stderr
     env: {}
-    workingdir: .
+    workingdir: WORKDIR
 
   slowstopper:
-    cmd: ["./testprograms/slowstopper/slowstopper"]
+    cmd: ["SLOWSTOPPER_PATH"]
     numprocs: 1
     autostart: true
     autorestart: never
@@ -80,10 +78,10 @@ programs:
     stdout: /tmp/slowstopper.stdout
     stderr: /tmp/slowstopper.stderr
     env: {}
-    workingdir: .
+    workingdir: WORKDIR
 
   envreporter:
-    cmd: ["./testprograms/envreporter/envreporter"]
+    cmd: ["ENVREPORTER_PATH"]
     numprocs: 1
     umask: 0o077
     workingdir: /tmp
