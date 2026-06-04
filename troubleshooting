@@ -1,0 +1,15 @@
+export PATH=$PATH:/usr/local/go/bin
+
+
+server:
+
+cat > /home/yel-bouk/Documents/taskmaster_42/testprograms/ticker/server.sh << 'EOF'
+#!/bin/bash
+count=0
+while true; do
+    echo "server-demo tick $count"
+    count=$((count + 1))
+    sleep 1
+done
+EOF
+chmod +x /home/yel-bouk/Documents/taskmaster_42/testprograms/ticker/server.sh

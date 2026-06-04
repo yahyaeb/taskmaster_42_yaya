@@ -157,17 +157,14 @@ func (m *Manager) Reload(newConfigs map[string]*Config) error {
 
 	return nil
 }
-
 func isConfigChanged(prevConfig, newConfig *Config) bool {
 	if prevConfig == nil || newConfig == nil {
 		return true
 	}
 
-	// Only check fields that require process restart
 	if len(prevConfig.Cmd) != len(newConfig.Cmd) {
 		return true
 	}
-
 	for i := range prevConfig.Cmd {
 		if prevConfig.Cmd[i] != newConfig.Cmd[i] {
 			return true
@@ -177,23 +174,41 @@ func isConfigChanged(prevConfig, newConfig *Config) bool {
 	if prevConfig.Workingdir != newConfig.Workingdir {
 		return true
 	}
-
 	if prevConfig.Umask != newConfig.Umask {
 		return true
 	}
-
+	if prevConfig.Autorestart != newConfig.Autorestart {
+		return true
+	}
+	if prevConfig.Stopsignal != newConfig.Stopsignal {
+		return true
+	}
+	if prevConfig.Stoptime != newConfig.Stoptime {
+		return true
+	}
+	if prevConfig.Starttime != newConfig.Starttime {
+		return true
+	}
+	if prevConfig.Startretries != newConfig.Startretries {
+		return true
+	}
+	if len(prevConfig.Exitcodes) != len(newConfig.Exitcodes) {
+		return true
+	}
+	for i := range prevConfig.Exitcodes {
+		if prevConfig.Exitcodes[i] != newConfig.Exitcodes[i] {
+			return true
+		}
+	}
 	if (prevConfig.Uid == nil) != (newConfig.Uid == nil) || (prevConfig.Uid != nil && *prevConfig.Uid != *newConfig.Uid) {
 		return true
 	}
-
 	if (prevConfig.Gid == nil) != (newConfig.Gid == nil) || (prevConfig.Gid != nil && *prevConfig.Gid != *newConfig.Gid) {
 		return true
 	}
-
 	if len(prevConfig.Env) != len(newConfig.Env) {
 		return true
 	}
-
 	for k, v := range prevConfig.Env {
 		if newConfig.Env[k] != v {
 			return true
