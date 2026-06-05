@@ -112,9 +112,9 @@ programs:
   server:
     uid: 1000
     gid: 1000
+    umask: 022
     cmd: ["sleep", "999"]
     numprocs: 1
-    umask: 022
     workingdir: .
     autostart: true
     autorestart: unexpected
@@ -129,7 +129,7 @@ programs:
       SHOW_NAME: server-demo
       STARTED_BY: taskmaster
       ANSWER: "42"
-  hello:
+  hello42:
     cmd: ["./testprograms/hello/hello.sh"]
     workingdir: .
     numprocs: 1

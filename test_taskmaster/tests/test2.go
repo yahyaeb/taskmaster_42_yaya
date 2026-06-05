@@ -4,12 +4,12 @@ import (
 	"strings"
 	"time"
 
-	"taskmaster/test_taskmaster/helpers"
 	"taskmaster/test_taskmaster/config"
+	"taskmaster/test_taskmaster/helpers"
 )
 
 func RunPoint2(ctx *helpers.TestContext, r *helpers.Report) {
-	r.Section("POINT 2 — Configuration File (autostart & numprocs)")
+	r.Section("TEST 2 — Configuration File (autostart & numprocs)")
 
 	// Wait briefly for autostart to kick in
 	time.Sleep(config.StopWaitTimeout)

@@ -8,8 +8,8 @@ import (
 
 // Paths — resolved relative to the project root (cwd at runtime).
 const (
-	DaemonBin = "taskmasterd"
-	CtlBin    = "taskmasterctl"
+	DaemonBin  = "taskmasterd"
+	CtlBin     = "taskmasterctl"
 	ConfigFile = "config.yml"
 	LogFile    = "taskmaster.log"
 )
@@ -24,21 +24,28 @@ const (
 
 // Process log paths used by the hello program in config.yml
 const (
-	HelloStdoutLog = "/tmp/hello.stdout"
-	HelloStderrLog = "/tmp/hello.stderr"
+	HelloStdoutLog       = "/tmp/hello.stdout"
+	HelloStderrLog       = "/tmp/hello.stderr"
+	SlowstopperStdoutLog = "/tmp/slowstopper.stdout"
+	EnvReporterStdoutLog = "/tmp/envreporter.out"
+	EnvReporterStderrLog = "/tmp/envreporter.err"
+	EnvReporterProbePath = "/tmp/envreporter_probe"
+	ServerUIDOut         = "/tmp/server.uid.out"
+	ServerGIDOut         = "/tmp/server.gid.out"
+	ServerUIDGIDProbe    = "/tmp/server.uidgid_probe"
 )
 
 // Timeouts
 const (
-	DaemonReadyTimeout  = 15 * time.Second
-	StatusPollInterval  = 200 * time.Millisecond
-	DefaultWaitTimeout  = 10 * time.Second
-	ReloadWaitTimeout   = 8 * time.Second
-	RestartWaitTimeout  = 4 * time.Second
+	DaemonReadyTimeout   = 15 * time.Second
+	StatusPollInterval   = 200 * time.Millisecond
+	DefaultWaitTimeout   = 10 * time.Second
+	ReloadWaitTimeout    = 8 * time.Second
+	RestartWaitTimeout   = 4 * time.Second
 	AutostartWaitTimeout = 2 * time.Second
-	StopWaitTimeout     = 1 * time.Second
-	LogFlushWait        = 2 * time.Second
-	StopSettleWait      = 300 * time.Millisecond
+	StopWaitTimeout      = 1 * time.Second
+	LogFlushWait         = 2 * time.Second
+	StopSettleWait       = 300 * time.Millisecond
 )
 
 // Build targets

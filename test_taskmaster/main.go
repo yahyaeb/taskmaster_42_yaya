@@ -17,6 +17,7 @@ func main() {
 func run() int {
 	root, err := os.Getwd()
 	helpers.Must(err)
+	helpers.Must(prepareGoBuildEnv())
 
 	p := helpers.DefaultPrinter
 	p.Banner("══════════════════════════════════════════════")
@@ -49,11 +50,24 @@ func run() int {
 
 	global := helpers.NewReport()
 
-	runTestBlock(ctx, global, "POINT 0", tests.RunPoint0)
-	runTestBlock(ctx, global, "POINT 1", tests.RunPoint1)
-	runTestBlock(ctx, global, "POINT 2", tests.RunPoint2)
-	runTestBlock(ctx, global, "POINT 3", tests.RunPoint3)
-	runTestBlock(ctx, global, "POINT 4", tests.RunPoint4)
+	runTestBlock(ctx, global, "TEST 0", tests.RunPoint0)
+	runTestBlock(ctx, global, "TEST 1", tests.RunPoint1)
+	runTestBlock(ctx, global, "TEST 2", tests.RunPoint2)
+	runTestBlock(ctx, global, "TEST 3", tests.RunPoint3)
+	runTestBlock(ctx, global, "TEST 4", tests.RunPoint4)
+	runTestBlock(ctx, global, "TEST 5.1", tests.RunPoint51)
+	runTestBlock(ctx, global, "TEST 5.2", tests.RunPoint52)
+	runTestBlock(ctx, global, "TEST 5.3", tests.RunPoint53)
+	runTestBlock(ctx, global, "TEST 5.4", tests.RunPoint54)
+	runTestBlock(ctx, global, "TEST 5.5", tests.RunPoint55)
+	runTestBlock(ctx, global, "TEST 5.6", tests.RunPoint56)
+	runTestBlock(ctx, global, "TEST 5.7", tests.RunPoint57)
+	runTestBlock(ctx, global, "TEST 5.8", tests.RunPoint58)
+	runTestBlock(ctx, global, "TEST 5.9", tests.RunPoint59)
+	runTestBlock(ctx, global, "TEST 5.10", tests.RunPoint510)
+	runTestBlock(ctx, global, "TEST 5.11", tests.RunPoint511)
+	runTestBlock(ctx, global, "TEST 5.12", tests.RunPoint512)
+	runTestBlock(ctx, global, "BONUS 1", tests.RunBonus1)
 
 	p.Banner("══════════════════════════════════════════════")
 	p.Banner("  Total Suite Results")
@@ -94,4 +108,25 @@ func cleanup(ctx *helpers.TestContext) {
 	_ = helpers.CopyFile(ctx.BackupPath, ctx.ConfigPath)
 	_ = os.Remove(ctx.BackupPath)
 	_ = os.Remove(ctx.SocketPath)
+}
+
+func prepareGoBuildEnv() error {
+	cacheVars := map[string]string{
+		"GOCACHE":    filepath.Join(os.TempDir(), "taskmaster-go-build-cache"),
+		"GOMODCACHE": filepath.Join(os.TempDir(), "taskmaster-go-mod-cache"),
+	}
+
+	for key, value := range cacheVars {
+		if os.Getenv(key) != "" {
+			continue
+		}
+		if err := os.MkdirAll(value, 0o755); err != nil {
+			return err
+		}
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

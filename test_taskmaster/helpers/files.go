@@ -67,11 +67,25 @@ func ReplaceBlockLines(block []string, key string, replacement []string) ([]stri
 		if strings.HasPrefix(line, prefix) {
 			out := append([]string{}, block[:i]...)
 			out = append(out, replacement...)
-			out = append(out, block[i+1:]...)
+			end := i + 1
+			for end < len(block) {
+				next := block[end]
+				if strings.HasPrefix(next, "    ") && !strings.HasPrefix(next, "      ") &&
+					strings.Contains(strings.TrimSpace(next), ":") {
+					break
+				}
+				end++
+			}
+			out = append(out, block[end:]...)
 			return out, nil
 		}
 	}
 	return nil, fmt.Errorf("key %q not found in block", key)
+}
+
+// ReplaceBlockValue replaces a single-line YAML key/value entry inside a program block.
+func ReplaceBlockValue(block []string, key, replacement string) ([]string, error) {
+	return ReplaceBlockLines(block, key, []string{replacement})
 }
 
 // RunCmd runs an external command in root and returns a wrapped error with stdout+stderr.

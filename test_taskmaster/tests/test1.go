@@ -4,24 +4,28 @@ import (
 	"strings"
 	"time"
 
-	"taskmaster/test_taskmaster/helpers"
 	"taskmaster/test_taskmaster/config"
+	"taskmaster/test_taskmaster/helpers"
 )
 
 func RunPoint1(ctx *helpers.TestContext, r *helpers.Report) {
-	r.Section("POINT 1 — Control Shell")
+	r.Section("TEST 1 — Control Shell")
 
 	r.Passf("Daemon started (PID %d)", ctx.Daemon.Process.Pid)
 
 	helpers.RunCtl(ctx, "stop dummy:00")
-	_, _ = helpers.WaitForStatus(ctx, config.StopWaitTimeout, func(m map[string]helpers.ProcStatus) bool {
+	_, err := helpers.WaitForStatus(ctx, config.DefaultWaitTimeout, func(m map[string]helpers.ProcStatus) bool {
 		p, ok := m["dummy:00"]
 		return ok && p.State == "stopped"
 	})
+	if err != nil {
+		r.Failf("1.0 stop dummy:00 did not settle before start: %v", err)
+		return
+	}
 
 	out, err := helpers.RunCtl(ctx, "start dummy:00")
 	if err == nil && (strings.Contains(out, "started") || strings.Contains(out, "running") || strings.Contains(out, "RUNNING")) {
-		_, _ = helpers.WaitForStatus(ctx, config.StopWaitTimeout, func(m map[string]helpers.ProcStatus) bool {
+		_, _ = helpers.WaitForStatus(ctx, config.DefaultWaitTimeout, func(m map[string]helpers.ProcStatus) bool {
 			p, ok := m["dummy:00"]
 			return ok && p.State == "running"
 		})
