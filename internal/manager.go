@@ -60,6 +60,11 @@ type reload struct {
 	reply   chan error
 }
 
+type finished struct {
+	name    string
+	runtime *Runtime
+}
+
 type shutdown struct {
 	reply chan struct{}
 }
@@ -262,7 +267,9 @@ func (m *Manager) eventLoop() {
 						spec:  c.configs[name],
 						state: ProcessInstance{Status: STOPPED},
 					}
-					toStart = append(toStart, name)
+					if inst.runtime != nil {
+						toStart = append(toStart, name)
+					}
 				}
 
 				for _, name := range sequence.Start {
@@ -271,7 +278,9 @@ func (m *Manager) eventLoop() {
 						state: ProcessInstance{Status: STOPPED},
 					}
 
-					toStart = append(toStart, name)
+					if c.configs[name].Autostart {
+						toStart = append(toStart, name)
+					}
 				}
 
 				c.reply <- nil
@@ -282,6 +291,15 @@ func (m *Manager) eventLoop() {
 
 				for _, name := range toStart {
 					m.initSupervise(name, instances[name])
+				}
+
+			case finished:
+				inst, exist := instances[c.name]
+				if !exist {
+					break
+				}
+				if inst.runtime == c.runtime {
+					inst.runtime = nil
 				}
 
 			case shutdown:
@@ -309,6 +327,10 @@ func (m *Manager) initSupervise(name string, inst *Instance) {
 	logger := m.logger
 	go func() {
 		supervise(rt.ctx, name, inst.spec, tracker, logger)
+		select {
+		case m.cmd <- finished{name: name, runtime: rt}:
+		default:
+		}
 		close(rt.done)
 		m.wait.Done()
 	}()

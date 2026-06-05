@@ -49,6 +49,19 @@ func privileged(config *Config, cmd *exec.Cmd) {
 	if config.Uid == nil && config.Gid == nil {
 		return
 	}
+
+	// Linux rejects Credential changes for some unprivileged launches even when
+	// the requested identity matches the current process. In that case, keep the
+	// current identity and avoid an unnecessary EPERM on exec.
+	if config.Uid != nil && *config.Uid != uint32(os.Geteuid()) {
+		goto apply
+	}
+	if config.Gid != nil && *config.Gid != uint32(os.Getegid()) {
+		goto apply
+	}
+	return
+
+apply:
 	cred := &syscall.Credential{}
 	if config.Uid != nil {
 		cred.Uid = *config.Uid

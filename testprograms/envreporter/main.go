@@ -12,7 +12,7 @@ func main() {
 
 	// 2. Print TM_* environment variables
 	for _, e := range os.Environ() {
-		if len(e) >= 4 && e[:4] == "TM_" {
+		if len(e) >= 3 && e[:3] == "TM_" {
 			fmt.Println(e)
 		}
 	}

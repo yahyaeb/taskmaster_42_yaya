@@ -144,18 +144,21 @@ func waitForStartup(processInfo *processInfo, name string, logger *Logger) (*exe
 			logger.LogMessage(LevelInfo, fmt.Sprintf("spawned: '%s' with pid %d", name, pid))
 		}
 
+		if processInfo.spec.Starttime <= 0 {
+			processInfo.tracker.Emit(RUNNING, pid, 0)
+			started = true
+			break
+		}
+
 		// Validate process startup within window
 		startupWindow := time.Duration(processInfo.spec.Starttime) * time.Second
-		// Enforce minimum 1 second startup validation window
-		if startupWindow < time.Second {
-			startupWindow = time.Second
-		}
 		timer := time.NewTimer(startupWindow)
 
 		select {
 		case <-processInfo.ctx.Done():
 			// Context cancelled during startup validation
-			stopProcess(cmd, processInfo.stopSignal, processInfo.stopTimeout, exitCh)
+			exitCode := stopProcess(cmd, processInfo.stopSignal, processInfo.stopTimeout, exitCh)
+			processInfo.tracker.Emit(STOPPED, pid, exitCode)
 			timer.Stop()
 			return nil, nil, 0, false
 

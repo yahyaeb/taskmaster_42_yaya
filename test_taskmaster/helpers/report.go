@@ -35,9 +35,9 @@ func (r *Report) Section(title string) { r.p.Section(title) }
 
 func (r *Report) PrintResults(pointName string) {
 	fmt.Printf("\n%s%s━━━ Results: %s ━━━%s\n\n", AnsiBold, AnsiNC, pointName, AnsiNC)
-	fmt.Printf("  %sPassed:%s %d\n", AnsiGreen, AnsiNC, r.Pass)
-	fmt.Printf("  %sFailed:%s %d\n", AnsiRed, AnsiNC, r.Fail)
-	fmt.Printf("  Total:    %d\n\n", r.Total)
+	fmt.Printf("  %sPassed:%s %d ", AnsiGreen, AnsiNC, r.Pass)
+	fmt.Printf("  %sFailed:%s %d ", AnsiRed, AnsiNC, r.Fail)
+	fmt.Printf("  Total: %d\n", r.Total)
 }
 
 // Merge adds src counts into r.
