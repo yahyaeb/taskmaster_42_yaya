@@ -15,6 +15,7 @@ import (
 
 func RunPoint51(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.1 — cmd")
+	r.Info("Guide option: which command launches the supervised process?")
 
 	p, err := waitForProc(ctx, "dummy:00", config.DefaultWaitTimeout, func(p helpers.ProcStatus) bool {
 		return p.State == "running" && p.PID > 0
@@ -40,6 +41,7 @@ func RunPoint51(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint52(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.2 — numprocs")
+	r.Info("Guide option: how many process instances to run? Isolated check (also smoke-tested in TEST 2).")
 
 	out, err := helpers.RunCtl(ctx, "status")
 	if err != nil {
@@ -58,6 +60,7 @@ func RunPoint52(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint53(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.3 — autostart")
+	r.Info("Guide option: should the program start automatically at daemon launch?")
 
 	lazy, err := waitForProc(ctx, "lazy:00", config.DefaultWaitTimeout, func(p helpers.ProcStatus) bool {
 		return p.State == "stopped"
@@ -76,20 +79,23 @@ func RunPoint53(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint54(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.4 — autorestart / exitcodes")
+	r.Info("Guide options: never / always / unexpected restart policy + expected exit codes.")
 
 	cases := []struct {
 		label       string
+		scenario    string
 		autorestart string
 		exitcodes   []int
 		expectation string
 	}{
-		{label: "5.4a", autorestart: "never", exitcodes: []int{0}, expectation: "stopped"},
-		{label: "5.4b", autorestart: "always", exitcodes: []int{0}, expectation: "restarted"},
-		{label: "5.4c", autorestart: "unexpected", exitcodes: []int{1}, expectation: "stopped"},
-		{label: "5.4d", autorestart: "unexpected", exitcodes: []int{0}, expectation: "restarted"},
+		{label: "5.4a", scenario: "autorestart=never, exit 0 → stays STOPPED (expected exit)", autorestart: "never", exitcodes: []int{0}, expectation: "stopped"},
+		{label: "5.4b", scenario: "autorestart=always, exit 0 → restarts", autorestart: "always", exitcodes: []int{0}, expectation: "restarted"},
+		{label: "5.4c", scenario: "autorestart=unexpected, exit 1 → stays STOPPED (unexpected exit)", autorestart: "unexpected", exitcodes: []int{1}, expectation: "stopped"},
+		{label: "5.4d", scenario: "autorestart=unexpected, exit 0 → restarts (exit in exitcodes)", autorestart: "unexpected", exitcodes: []int{0}, expectation: "restarted"},
 	}
 
 	for _, tc := range cases {
+		r.Info(tc.scenario)
 		forceStop(ctx, "lazy:00")
 		if err := configureLazyCrashSpec(ctx, 2, 1, 0, tc.autorestart, tc.exitcodes); err != nil {
 			r.Failf("%s could not update lazy config: %v", tc.label, err)
@@ -135,6 +141,7 @@ func RunPoint54(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint55(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.5 — starttime")
+	r.Info("Guide option: how long to wait before declaring a process successfully started?")
 
 	forceStop(ctx, "lazy:00")
 	if err := configureLazyCrashSpec(ctx, 1, 5, 0, "never", []int{0}); err != nil {
@@ -161,6 +168,7 @@ func RunPoint55(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint56(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.6 — startretries")
+	r.Info("Guide option: how many launch attempts before aborting? Must be logged.")
 
 	forceStop(ctx, "lazy:00")
 	if err := os.WriteFile(ctx.LogPath, []byte{}, 0o644); err != nil {
@@ -203,6 +211,7 @@ func RunPoint56(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint57(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.7 — stopsignal")
+	r.Info("Guide option: which signal stops the process gracefully?")
 
 	forceStop(ctx, "slowstopper:00")
 	if err := configureSlowstopperStop(ctx, "USR1", 3); err != nil {
@@ -283,6 +292,7 @@ func RunPoint57(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint58(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.8 — stoptime")
+	r.Info("Guide option: grace period after stop signal before force-killing.")
 
 	forceStop(ctx, "slowstopper:00")
 	if err := configureSlowstopperStop(ctx, "TERM", 1); err != nil {
@@ -323,6 +333,7 @@ func RunPoint58(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint59(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.9 — stdout / stderr")
+	r.Info("Guide option: redirect stdout/stderr to files (isolated check — also smoke-tested in TEST 3).")
 
 	forceStop(ctx, "hello42:00")
 	_ = os.WriteFile(config.HelloStdoutLog, []byte{}, 0o644)
@@ -352,6 +363,7 @@ func RunPoint59(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint510(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.10 — env")
+	r.Info("Guide option: environment variables injected into the supervised process.")
 
 	out, err := triggerEnvReporter(ctx)
 	if err != nil {
@@ -370,6 +382,7 @@ func RunPoint510(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint511(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.11 — workingdir")
+	r.Info("Guide option: working directory for the supervised process.")
 
 	out, err := triggerEnvReporter(ctx)
 	if err != nil {
@@ -386,6 +399,7 @@ func RunPoint511(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunPoint512(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 5.12 — umask")
+	r.Info("Guide option: file creation mask for the supervised process.")
 
 	_, err := triggerEnvReporter(ctx)
 	if err != nil {
@@ -408,6 +422,7 @@ func RunPoint512(ctx *helpers.TestContext, r *helpers.Report) {
 
 func RunBonus1(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("BONUS 1 — uid / gid")
+	r.Info("Guide bonus: privilege de-escalation — run supervised process as a specific user.")
 
 	forceStop(ctx, "server:00")
 	_ = os.Remove(config.ServerUIDOut)

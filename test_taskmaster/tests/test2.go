@@ -9,7 +9,9 @@ import (
 )
 
 func RunPoint2(ctx *helpers.TestContext, r *helpers.Report) {
-	r.Section("TEST 2 — Configuration File (autostart & numprocs)")
+	r.Section("TEST 2 — Configuration File (Boot Smoke Test)")
+	r.Info("Guide: daemon loads config.yml at startup; status reflects configured programs.")
+	r.Info("Boot smoke test for numprocs + autostart — see TEST 5.2/5.3 for isolated option checks.")
 
 	// Wait briefly for autostart to kick in
 	time.Sleep(config.StopWaitTimeout)

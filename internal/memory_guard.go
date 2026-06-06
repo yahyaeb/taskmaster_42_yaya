@@ -8,13 +8,6 @@ import (
 )
 
 // RunMemoryGuard starts a background loop that monitors system memory usage.
-// When usage exceeds cfg.Threshold, it kills the lowest-priority RUNNING process.
-// Returns immediately if cfg.Enabled is false.
-//
-// Important: the guard captures cfg by value at startup and runs with those
-// values for its entire lifetime. Changes to threshold or interval via config
-// reload have no effect on a running guard; a daemon restart is required for
-// those changes to take effect. Hot-reload of guard parameters is a follow-up.
 func RunMemoryGuard(ctx context.Context, cfg MemoryGuardConfig, mgr *Manager, logger *Logger) {
 	if !cfg.Enabled {
 		return
@@ -58,7 +51,6 @@ func priorityRank(p string) (int, bool) {
 }
 
 // killLowestPriority selects the RUNNING process with the lowest memory_priority
-// and stops it. If multiple processes share the lowest rank, picks alphabetically.
 func killLowestPriority(mgr *Manager, logger *Logger) {
 	instances := mgr.GetRunningInstances()
 	if len(instances) == 0 {

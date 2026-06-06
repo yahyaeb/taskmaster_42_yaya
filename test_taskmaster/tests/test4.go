@@ -10,6 +10,10 @@ import (
 )
 
 func RunPoint4(ctx *helpers.TestContext, r *helpers.Report) {
+	r.Section("TEST 4 — Hot-Reload")
+	r.Info("Guide: reload via ctl command and SIGHUP; only changed programs restart.")
+	r.Info("Critical rule: unchanged programs must keep the same PID.")
+
 	r.Section("TEST 4.1 — Reload Command")
 
 	statusBefore, err := helpers.WaitForStatus(ctx, config.DefaultWaitTimeout, func(m map[string]helpers.ProcStatus) bool {

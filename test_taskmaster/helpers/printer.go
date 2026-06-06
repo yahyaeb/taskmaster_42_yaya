@@ -29,5 +29,9 @@ func (p Printer) Banner(text string) {
 	fmt.Printf("%s%s%s\n", AnsiBold, text, AnsiNC)
 }
 
+func (p Printer) Info(msg string) {
+	fmt.Printf("  · %s\n", msg)
+}
+
 // DefaultPrinter is the shared terminal printer used by Report and main.
 var DefaultPrinter = Printer{}

@@ -33,6 +33,8 @@ func (r *Report) FailMsg(msg string) { r.Failf("%s", msg) }
 
 func (r *Report) Section(title string) { r.p.Section(title) }
 
+func (r *Report) Info(msg string) { r.p.Info(msg) }
+
 func (r *Report) PrintResults(pointName string) {
 	fmt.Printf("\n%s%s━━━ Results: %s ━━━%s\n\n", AnsiBold, AnsiNC, pointName, AnsiNC)
 	fmt.Printf("  %sPassed:%s %d ", AnsiGreen, AnsiNC, r.Pass)

@@ -68,6 +68,9 @@ func run() int {
 	runTestBlock(ctx, global, "TEST 5.11", tests.RunPoint511)
 	runTestBlock(ctx, global, "TEST 5.12", tests.RunPoint512)
 	runTestBlock(ctx, global, "BONUS 1", tests.RunBonus1)
+	runTestBlock(ctx, global, "TEST 6", tests.RunPoint6)
+	runTestBlock(ctx, global, "TEST 7", tests.RunPoint7)
+	runTestBlock(ctx, global, "STABILITY", tests.RunStability)
 
 	p.Banner("══════════════════════════════════════════════")
 	p.Banner("  Total Suite Results")

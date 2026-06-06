@@ -10,7 +10,9 @@ import (
 )
 
 func RunPoint3(ctx *helpers.TestContext, r *helpers.Report) {
-	r.Section("TEST 3 — Logging (Stdout / Stderr Redirection)")
+	r.Section("TEST 3 — Logging (Boot Smoke Test)")
+	r.Info("Guide: daemon writes to its logfile; supervised stdout/stderr can be redirected.")
+	r.Info("Boot smoke test — see TEST 5.9 for on-demand redirection and TEST 7 for lifecycle events.")
 
 	// In config.yml, 'hello' program autostarts, writes to stdout/stderr and sleeps
 	// Let's ensure it has had a chance to start and write

@@ -10,11 +10,22 @@ import (
 
 func RunPoint1(ctx *helpers.TestContext, r *helpers.Report) {
 	r.Section("TEST 1 — Control Shell")
+	r.Info("Guide: ctl must start, stop, restart programs and reflect state in status.")
+	r.Info("Uses dummy:00 for the full start → stop → restart cycle.")
 
 	r.Passf("Daemon started (PID %d)", ctx.Daemon.Process.Pid)
 
-	helpers.RunCtl(ctx, "stop dummy:00")
 	_, err := helpers.WaitForStatus(ctx, config.DefaultWaitTimeout, func(m map[string]helpers.ProcStatus) bool {
+		p, ok := m["dummy:00"]
+		return ok && p.State == "running"
+	})
+	if err != nil {
+		r.Failf("1.0 dummy:00 not running before stop test: %v", err)
+		return
+	}
+
+	helpers.RunCtl(ctx, "stop dummy:00")
+	_, err = helpers.WaitForStatus(ctx, config.DefaultWaitTimeout, func(m map[string]helpers.ProcStatus) bool {
 		p, ok := m["dummy:00"]
 		return ok && p.State == "stopped"
 	})
